@@ -218,6 +218,7 @@ class WriteProxy(object):
         def __init__(self, buffer_size):
             self.f = tempfile.SpooledTemporaryFile(max_size=buffer_size)
             self.lock = Lock()
+            self.dirty = True
 
         def read(self, offset, length: int):
             with self.lock:
@@ -226,6 +227,7 @@ class WriteProxy(object):
 
         def write(self, offset, bytes_: bytes):
             with self.lock:
+                self.dirty = True
                 self.f.seek(0, os.SEEK_END)
                 old_len = self.f.tell()
                 if offset > old_len:
@@ -248,7 +250,10 @@ class WriteProxy(object):
     def _write_and_sync(self, buffer: WriteBuffer, node_id: str):
         try:
             with buffer.lock:
+                if not buffer.dirty:
+                    return
                 r = self.acd_client.overwrite_tempfile(node_id, buffer.get_file())
+                buffer.dirty = False
         except (RequestError, IOError) as e:
             logger.error('Error writing node "%s". %s' % (node_id, str(e)))
         else:
@@ -272,9 +277,12 @@ class WriteProxy(object):
         if b:
             return b.length()
 
-    def release(self, node_id, fh):
-        """:raises: FuseOSError"""
+    def flush(self, node_id, fh):
+        b = self.buffers.get(node_id)
+        if b:
+            self._write_and_sync(b, node_id)
 
+    def release(self, node_id, fh):
         b = self.buffers.get(node_id)
         if b:
             self._write_and_sync(b, node_id)
@@ -684,9 +692,13 @@ class ACDFuse(LoggingMixIn, Operations):
         return len(data)
 
     def flush(self, path, fh):
-        """noop since we need to keep the whole buffer in memory;
-        acd only supports sequentual writes otherwise"""
-        pass
+        if fh:
+            node = self.handles[fh]
+        else:
+            node = self.cache.resolve(path)
+        if not node:
+            raise FuseOSError(errno.ENOENT)
+        self.wp.flush(node.id, fh)
 
     def truncate(self, path, length, fh=None):
         """Pseudo-truncates a file, i.e. clears content if ``length``==0 or does nothing
