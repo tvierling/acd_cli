@@ -61,57 +61,63 @@ class ContentMixin(object):
     """Implements content portion of the ACD API."""
 
     def create_folder(self, name: str, parent=None) -> dict:
-        body = {'kind': 'FOLDER', 'name': name}
-        if parent:
-            body['parents'] = [parent]
-        body_str = json.dumps(body)
+        while True:
+            body = {'kind': 'FOLDER', 'name': name}
+            if parent:
+                body['parents'] = [parent]
+            body_str = json.dumps(body)
 
-        acc_codes = [http.CREATED]
+            acc_codes = [http.CREATED]
 
-        r = self.BOReq.post(self.metadata_url + 'nodes', acc_codes=acc_codes, data=body_str)
+            r = self.BOReq.post(self.metadata_url + 'nodes', acc_codes=acc_codes, data=body_str)
+            if r.status_code == 500: continue  # the fault lies not in our stars, but in amazon
 
-        if r.status_code not in acc_codes:
-            raise RequestError(r.status_code, r.text)
+            if r.status_code not in acc_codes:
+                raise RequestError(r.status_code, r.text)
 
-        return r.json()
+            return r.json()
 
     def create_file(self, file_name: str, parent: str = None) -> dict:
-        params = {'suppress': 'deduplication'}
+        while True:
+            params = {'suppress': 'deduplication'}
 
-        basename = os.path.basename(file_name)
-        metadata = {'kind': 'FILE', 'name': basename}
-        if parent:
-            metadata['parents'] = [parent]
-        mime_type = _get_mimetype(basename)
-        f = io.BytesIO()
+            basename = os.path.basename(file_name)
+            metadata = {'kind': 'FILE', 'name': basename}
+            if parent:
+                metadata['parents'] = [parent]
+            mime_type = _get_mimetype(basename)
+            f = io.BytesIO()
 
-        # basename is ignored
-        m = MultipartEncoder(fields=OrderedDict([('metadata', json.dumps(metadata)),
-                                                 ('content', (quote_plus(basename), f, mime_type))])
-                             )
+            # basename is ignored
+            m = MultipartEncoder(fields=OrderedDict([('metadata', json.dumps(metadata)),
+                                                     ('content', (quote_plus(basename), f, mime_type))])
+                                 )
 
-        ok_codes = [http.CREATED]
-        r = self.BOReq.post(self.content_url + 'nodes', params=params, data=m,
-                            acc_codes=ok_codes, headers={'Content-Type': m.content_type})
+            ok_codes = [http.CREATED]
+            r = self.BOReq.post(self.content_url + 'nodes', params=params, data=m,
+                                acc_codes=ok_codes, headers={'Content-Type': m.content_type})
+            if r.status_code == 500: continue  # the fault lies not in our stars, but in amazon
 
-        if r.status_code not in ok_codes:
-            raise RequestError(r.status_code, r.text)
-        return r.json()
+            if r.status_code not in ok_codes:
+                raise RequestError(r.status_code, r.text)
+            return r.json()
 
     def clear_file(self, node_id: str) -> dict:
         """Clears a file's content by overwriting it with an empty BytesIO.
 
         :param node_id: valid file node ID"""
 
-        m = MultipartEncoder(fields={('content', (' ', io.BytesIO(), _get_mimetype()))})
+        while True:
+            m = MultipartEncoder(fields={('content', (' ', io.BytesIO(), _get_mimetype()))})
 
-        r = self.BOReq.put(self.content_url + 'nodes/' + node_id + '/content', params={},
-                           data=m, stream=True, headers={'Content-Type': m.content_type})
+            r = self.BOReq.put(self.content_url + 'nodes/' + node_id + '/content', params={},
+                               data=m, stream=True, headers={'Content-Type': m.content_type})
+            if r.status_code == 500: continue  # the fault lies not in our stars, but in amazon
 
-        if r.status_code not in OK_CODES:
-            raise RequestError(r.status_code, r.text)
+            if r.status_code not in OK_CODES:
+                raise RequestError(r.status_code, r.text)
 
-        return r.json()
+            return r.json()
 
     def upload_file(self, file_name: str, parent: str = None,
                     read_callbacks=None, deduplication=False) -> dict:
@@ -214,22 +220,24 @@ class ContentMixin(object):
 
     def overwrite_tempfile(self, node_id: str, file,
                        read_callbacks: list = None, deduplication=False) -> dict:
-        params = {} if deduplication else {'suppress': 'deduplication'}
+        while True:
+            params = {} if deduplication else {'suppress': 'deduplication'}
 
-        basename = "file.bin"
-        mime_type = _get_mimetype(basename)
-        f = _TeeBufferedReader(file, callbacks=read_callbacks)
+            basename = "file.bin"
+            mime_type = _get_mimetype(basename)
+            f = _TeeBufferedReader(file, callbacks=read_callbacks)
 
-        # basename is ignored
-        m = MultipartEncoder(fields={('content', (quote_plus(basename), f, mime_type))})
+            # basename is ignored
+            m = MultipartEncoder(fields={('content', (quote_plus(basename), f, mime_type))})
 
-        r = self.BOReq.put(self.content_url + 'nodes/' + node_id + '/content', params=params,
-                           data=m, stream=True, headers={'Content-Type': m.content_type})
+            r = self.BOReq.put(self.content_url + 'nodes/' + node_id + '/content', params=params,
+                               data=m, stream=True, headers={'Content-Type': m.content_type})
+            if r.status_code == 500: continue  # the fault lies not in our stars, but in amazon
 
-        if r.status_code not in OK_CODES:
-            raise RequestError(r.status_code, r.text)
+            if r.status_code not in OK_CODES:
+                raise RequestError(r.status_code, r.text)
 
-        return r.json()
+            return r.json()
 
     def overwrite_stream(self, stream, node_id: str, read_callbacks: list = None) -> dict:
         """Overwrite content of node with ID *node_id* with content of *stream*.

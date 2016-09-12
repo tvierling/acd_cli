@@ -153,11 +153,13 @@ class MetadataMixin(object):
     # this will increment the node's version attribute
     def update_metadata(self, node_id: str, properties: dict) -> dict:
         """Update a node's properties like name, description, status, parents, ..."""
-        body = json.dumps(properties)
-        r = self.BOReq.patch(self.metadata_url + 'nodes/' + node_id, data=body)
-        if r.status_code not in OK_CODES:
-            raise RequestError(r.status_code, r.text)
-        return r.json()
+        while True:
+            body = json.dumps(properties)
+            r = self.BOReq.patch(self.metadata_url + 'nodes/' + node_id, data=body)
+            if r.status_code == 500: continue  # the fault lies not in our stars, but in amazon
+            if r.status_code not in OK_CODES:
+                raise RequestError(r.status_code, r.text)
+            return r.json()
 
     def get_root_id(self) -> str:
         """Gets the ID of the root node
@@ -249,13 +251,15 @@ class MetadataMixin(object):
         :returns dict: {'key': '<KEY>', 'location': '<NODE_ADDRESS>/properties/<OWNER_ID/<KEY>',
         'value': '<VALUE>'}"""
 
-        ok_codes = [requests.codes.CREATED]
-        r = self.BOReq.put(self.metadata_url + 'nodes/' + node_id +
-                           '/properties/' + owner_id + '/' + key,
-                           data=json.dumps({'value': value}), acc_codes=ok_codes)
-        if r.status_code not in ok_codes:
-            raise RequestError(r.status_code, r.text)
-        return r.json()
+        while True:
+            ok_codes = [requests.codes.CREATED]
+            r = self.BOReq.put(self.metadata_url + 'nodes/' + node_id +
+                               '/properties/' + owner_id + '/' + key,
+                               data=json.dumps({'value': value}), acc_codes=ok_codes)
+            if r.status_code == 500: continue  # the fault lies not in our stars, but in amazon
+            if r.status_code not in ok_codes:
+                raise RequestError(r.status_code, r.text)
+            return r.json()
 
     def delete_property(self, node_id: str, owner_id: str, key: str):
         """Deletes *key* property from node with ID *node_id*."""
