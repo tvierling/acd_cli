@@ -1,12 +1,12 @@
 import http.client as http
-import os
-import json
 import io
-import mimetypes
-import tempfile
-from collections import OrderedDict
+import json
 import logging
+import mimetypes
+import os
+from collections import OrderedDict
 from urllib.parse import quote_plus
+
 from requests import Response
 from requests_toolbelt import MultipartEncoder
 
@@ -70,7 +70,7 @@ class ContentMixin(object):
             acc_codes = [http.CREATED]
 
             r = self.BOReq.post(self.metadata_url + 'nodes', acc_codes=acc_codes, data=body_str)
-            if r.status_code == 500: continue  # the fault lies not in our stars, but in amazon
+            if r.status_code in RETRY_CODES: continue  # the fault lies not in our stars, but in amazon
 
             if r.status_code not in acc_codes:
                 raise RequestError(r.status_code, r.text)
@@ -96,7 +96,7 @@ class ContentMixin(object):
             ok_codes = [http.CREATED]
             r = self.BOReq.post(self.content_url + 'nodes', params=params, data=m,
                                 acc_codes=ok_codes, headers={'Content-Type': m.content_type})
-            if r.status_code == 500: continue  # the fault lies not in our stars, but in amazon
+            if r.status_code in RETRY_CODES: continue  # the fault lies not in our stars, but in amazon
 
             if r.status_code not in ok_codes:
                 raise RequestError(r.status_code, r.text)
@@ -112,7 +112,7 @@ class ContentMixin(object):
 
             r = self.BOReq.put(self.content_url + 'nodes/' + node_id + '/content', params={},
                                data=m, stream=True, headers={'Content-Type': m.content_type})
-            if r.status_code == 500: continue  # the fault lies not in our stars, but in amazon
+            if r.status_code in RETRY_CODES: continue  # the fault lies not in our stars, but in amazon
 
             if r.status_code not in OK_CODES:
                 raise RequestError(r.status_code, r.text)
@@ -221,6 +221,7 @@ class ContentMixin(object):
     def overwrite_tempfile(self, node_id: str, file,
                        read_callbacks: list = None, deduplication=False) -> dict:
         while True:
+            file.seek(0)
             params = {} if deduplication else {'suppress': 'deduplication'}
 
             basename = "file.bin"
@@ -232,7 +233,7 @@ class ContentMixin(object):
 
             r = self.BOReq.put(self.content_url + 'nodes/' + node_id + '/content', params=params,
                                data=m, stream=True, headers={'Content-Type': m.content_type})
-            if r.status_code == 500: continue  # the fault lies not in our stars, but in amazon
+            if r.status_code in RETRY_CODES: continue  # the fault lies not in our stars, but in amazon
 
             if r.status_code not in OK_CODES:
                 raise RequestError(r.status_code, r.text)

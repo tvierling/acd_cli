@@ -1,8 +1,8 @@
 """Node metadata operations"""
 
+import http.client
 import json
 import logging
-import http.client
 import tempfile
 from collections import namedtuple
 
@@ -156,7 +156,7 @@ class MetadataMixin(object):
         while True:
             body = json.dumps(properties)
             r = self.BOReq.patch(self.metadata_url + 'nodes/' + node_id, data=body)
-            if r.status_code == 500: continue  # the fault lies not in our stars, but in amazon
+            if r.status_code in RETRY_CODES: continue  # the fault lies not in our stars, but in amazon
             if r.status_code not in OK_CODES:
                 raise RequestError(r.status_code, r.text)
             return r.json()
@@ -256,7 +256,7 @@ class MetadataMixin(object):
             r = self.BOReq.put(self.metadata_url + 'nodes/' + node_id +
                                '/properties/' + owner_id + '/' + key,
                                data=json.dumps({'value': value}), acc_codes=ok_codes)
-            if r.status_code == 500: continue  # the fault lies not in our stars, but in amazon
+            if r.status_code in RETRY_CODES: continue  # the fault lies not in our stars, but in amazon
             if r.status_code not in ok_codes:
                 raise RequestError(r.status_code, r.text)
             return r.json()

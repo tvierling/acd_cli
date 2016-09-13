@@ -14,7 +14,7 @@ class TrashMixin(object):
     def move_to_trash(self, node_id: str) -> dict:
         while True:
             r = self.BOReq.put(self.metadata_url + 'trash/' + node_id)
-            if r.status_code == 500: continue  # the fault lies not in our stars, but in amazon
+            if r.status_code in RETRY_CODES: continue  # the fault lies not in our stars, but in amazon
             if r.status_code not in OK_CODES:
                 raise RequestError(r.status_code, r.text)
             return r.json()
