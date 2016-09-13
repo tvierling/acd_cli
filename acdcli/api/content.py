@@ -377,19 +377,21 @@ class ContentMixin(object):
         return
 
     def response_chunk(self, node_id: str, offset: int, length: int, **kwargs) -> Response:
-        ok_codes = [http.PARTIAL_CONTENT]
-        end = offset + length - 1
-        logger.debug('chunk o %d l %d' % (offset, length))
+        while True:
+            ok_codes = [http.PARTIAL_CONTENT]
+            retry_codes = [1000]
+            end = offset + length - 1
+            logger.debug('chunk o %d l %d' % (offset, length))
 
-        r = self.BOReq.get(self.content_url + 'nodes/' + node_id + '/content',
-                           acc_codes=ok_codes, stream=True,
-                           headers={'Range': 'bytes=%d-%d' % (offset, end)}, **kwargs)
-        # if r.status_code == http.REQUESTED_RANGE_NOT_SATISFIABLE:
-        #     return
-        if r.status_code not in ok_codes:
-            raise RequestError(r.status_code, r.text)
-
-        return r
+            r = self.BOReq.get(self.content_url + 'nodes/' + node_id + '/content',
+                               acc_codes=ok_codes, stream=True,
+                               headers={'Range': 'bytes=%d-%d' % (offset, end)}, **kwargs)
+            # if r.status_code == http.REQUESTED_RANGE_NOT_SATISFIABLE:
+            #     return
+            if r.status_code in retry_codes: continue  # the fault lies not in our stars, but in amazon
+            if r.status_code not in ok_codes:
+                raise RequestError(r.status_code, r.text)
+            return r
 
     def download_chunk(self, node_id: str, offset: int, length: int, **kwargs) -> bytearray:
         """Load a file chunk into memory.
