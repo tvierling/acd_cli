@@ -71,7 +71,7 @@ conf = None
 
 # consts
 
-MIN_AUTOSYNC_INTERVAL = 60
+MIN_SYNC_INTERVAL = 300
 MAX_LOG_SIZE = 10 * 2 ** 20
 MAX_LOG_FILES = 5
 
@@ -130,6 +130,14 @@ def sync_owner_id():
 def sync_node_list(full=False, to_file=None, from_file=None) -> 'Union[int, None]':
     global cache
     cp_ = cache.KeyValueStorage.get(CacheConsts.CHECKPOINT_KEY) if not full else None
+    lst = cache.KeyValueStorage.get(CacheConsts.LAST_SYNC_KEY)
+    lst = float(lst) if lst else 0
+
+    wt = min(lst + MIN_SYNC_INTERVAL - time.time(), MIN_SYNC_INTERVAL)
+    if lst and wt > 0:
+        print('Last sync was very recent or has invalid date. Waiting %im %is.' 
+              % (wt / 60, wt % 60))
+        time.sleep(wt)
 
     print('Getting changes', end='', flush=True)
 
@@ -215,7 +223,7 @@ def autosync(interval: int, stop: Event = None):
     if not interval:
         return
 
-    interval = max(MIN_AUTOSYNC_INTERVAL, interval)
+    interval = max(MIN_SYNC_INTERVAL, interval)
     while True:
         if stop.is_set():
             break
@@ -523,13 +531,13 @@ def upload_file(path: str, parent_id: str, overwr: bool, force: bool, dedup: boo
     if not overwr and not force:
         logger.info('Skipping upload of existing file "%s".' % short_nm)
         pg_handler.done()
-        
+
         if not rsf:
             return 0
 
         if not compare_sizes(os.path.getsize(path), conflicting_node.size, short_nm):
             return remove_file(path)
-        
+
         logger.info('Keeping "%s" because of remote size mismatch.' % path)
         return 0
 
