@@ -231,8 +231,13 @@ class ContentMixin(object):
             # basename is ignored
             m = MultipartEncoder(fields={('content', (quote_plus(basename), f, mime_type))})
 
-            r = self.BOReq.put(self.content_url + 'nodes/' + node_id + '/content', params=params,
-                               data=m, stream=True, headers={'Content-Type': m.content_type})
+            try:
+                r = self.BOReq.put(self.content_url + 'nodes/' + node_id + '/content', params=params,
+                                   data=m, stream=True, headers={'Content-Type': m.content_type})
+            except RequestError as e:
+                if e.status_code == RequestError.CODE.CONN_EXCEPTION: continue
+                raise
+
             if r.status_code in RETRY_CODES: continue  # the fault lies not in our stars, but in amazon
 
             if r.status_code not in OK_CODES:
