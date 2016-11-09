@@ -384,7 +384,6 @@ class ContentMixin(object):
     def response_chunk(self, node_id: str, offset: int, length: int, **kwargs) -> Response:
         while True:
             ok_codes = [http.PARTIAL_CONTENT]
-            retry_codes = [400]
             end = offset + length - 1
             logger.debug('chunk o %d l %d' % (offset, length))
 
@@ -397,7 +396,7 @@ class ContentMixin(object):
                 raise
             # if r.status_code == http.REQUESTED_RANGE_NOT_SATISFIABLE:
             #     return
-            if r.status_code in retry_codes: continue  # the fault lies not in our stars, but in amazon
+            if r.status_code in RETRY_CODES: continue  # the fault lies not in our stars, but in amazon
             if r.status_code not in ok_codes:
                 raise RequestError(r.status_code, r.text)
             return r
