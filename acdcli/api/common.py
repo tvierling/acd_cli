@@ -14,7 +14,10 @@ except ImportError:
 
 # status codes that indicate request success
 OK_CODES = [requests.codes.OK]
-RETRY_CODES = [requests.codes.server_error, requests.codes.gateway_timeout, requests.codes.bad_request]
+RETRY_CODES = [requests.codes.server_error,
+               requests.codes.gateway_timeout,
+               requests.codes.bad_request,
+               requests.codes.service_unavailable]
 
 class RequestError(Exception):
     """Catch-all exception class for various connection and ACD server errors."""
