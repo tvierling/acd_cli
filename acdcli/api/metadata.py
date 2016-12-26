@@ -227,11 +227,24 @@ class MetadataMixin(object):
         return r.json()
 
     def move_node(self, node_id: str, parent_id: str) -> dict:
-        return self.update_metadata(node_id, {'parents': [parent_id]})
+        properties = {'parents': [parent_id]}
+        # logger.debug('MOVE: parents: %s' % str([parent_id]))
+        while True:
+            ret = self.update_metadata(node_id, properties)
+            metadata = self.get_metadata(node_id, False, False)
+            # logger.debug('MOVE: metadata: %s' % str(metadata))
+            if metadata['parents'] == [parent_id]: break
+        return ret
 
     def rename_node(self, node_id: str, new_name: str) -> dict:
         properties = {'name': new_name}
-        return self.update_metadata(node_id, properties)
+        # logger.debug('RENAME: new_name: %s' % new_name)
+        while True:
+            ret = self.update_metadata(node_id, properties)
+            metadata = self.get_metadata(node_id, False, False)
+            # logger.debug('RENAME: metadata: %s' % str(metadata))
+            if metadata['name'] == new_name: break
+        return ret
 
     def set_available(self, node_id: str) -> dict:
         """Sets node status from 'PENDING' to 'AVAILABLE'."""
