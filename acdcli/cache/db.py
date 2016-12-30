@@ -21,7 +21,7 @@ _ROOT_ID_SQL = 'SELECT id FROM nodes WHERE name IS NULL AND type == "folder" ORD
 _SETTINGS_FILENAME = 'cache.ini'
 
 _def_conf = configparser.ConfigParser()
-_def_conf['sqlite'] = dict(filename='nodes.db', busy_timeout=30000, journal_mode='wal')
+_def_conf['sqlite'] = dict(filename='nodes.db', busy_timeout=30000, journal_mode='wal', conn_timeout=5000)
 _def_conf['blacklist'] = dict(folders=[])
 
 
@@ -32,13 +32,6 @@ class IntegrityError(Exception):
 
     def __str__(self):
         return repr(self.msg)
-
-
-def _create_conn(path: str) -> sqlite3.Connection:
-    c = sqlite3.connect(path)
-    c.row_factory = sqlite3.Row # allow dict-like access on rows with col name
-    return c
-
 
 def _regex_match(pattern: str, cell: str) -> bool:
     if cell is None:
@@ -77,10 +70,16 @@ class NodeCache(SchemaMixin, QueryMixin, SyncMixin, FormatterMixin):
         self._execute_pragma('busy_timeout', self._conf['sqlite']['busy_timeout'])
         self._execute_pragma('journal_mode', self._conf['sqlite']['journal_mode'])
 
+    def _create_conn(self, path: str) -> sqlite3.Connection:
+        timeout = self._conf.getint('sqlite', 'conn_timeout')
+        c = sqlite3.connect(path, timeout=timeout)
+        c.row_factory = sqlite3.Row # allow dict-like access on rows with col name
+        return c
+
     @property
     def _conn(self) -> sqlite3.Connection:
         if not hasattr(self.tl, '_conn'):
-            self.tl._conn = _create_conn(self.db_path)
+            self.tl._conn = self._create_conn(self.db_path)
         return self.tl._conn
 
     def _execute_pragma(self, key, value) -> str:
