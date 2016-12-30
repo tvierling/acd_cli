@@ -66,6 +66,9 @@ cache.ini
   ;sets the time to sleep if a table is locked [milliseconds]
   busy_timeout = 30000
 
+  ;sets the time to wait for a connection while sqlite is locked [milliseconds]
+  conn_timeout = 5000
+
   ;https://www.sqlite.org/pragma.html#pragma_journal_mode
   journal_mode = wal
 
