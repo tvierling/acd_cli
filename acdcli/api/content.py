@@ -217,21 +217,27 @@ class ContentMixin(object):
         return r.json()
 
     def overwrite_tempfile(self, node_id: str, file,
-                       read_callbacks: list = None, deduplication=False) -> dict:
+                       read_callbacks: list = None) -> dict:
+        """Overwrite content of node with ID *node_id* with content of *file*.
+
+        :param file: readable and seekable object"""
+
         while True:
+            # logger.debug('OVERWRITE: node_id: %s' % node_id)
             file.seek(0)
-            params = {} if deduplication else {'suppress': 'deduplication'}
 
-            basename = "file.bin"
-            mime_type = _get_mimetype(basename)
-            f = _TeeBufferedReader(file, callbacks=read_callbacks)
+            if _stream_is_empty(file):
+                return self.clear_file(node_id)
 
-            # basename is ignored
-            m = MultipartEncoder(fields={('content', (quote_plus(basename), f, mime_type))})
+            metadata = {}
+            import uuid
+            boundary = uuid.uuid4().hex
 
             try:
-                r = self.BOReq.put(self.content_url + 'nodes/' + node_id + '/content', params=params,
-                                   data=m, stream=True, headers={'Content-Type': m.content_type})
+                r = self.BOReq.put(self.content_url + 'nodes/' + node_id + '/content',
+                                   data=self._multipart_stream(metadata, file, boundary, read_callbacks),
+                                   headers={'Content-Type': 'multipart/form-data; boundary=%s'
+                                                            % boundary})
             except RequestError as e:
                 if e.status_code == RequestError.CODE.CONN_EXCEPTION: continue
                 raise
