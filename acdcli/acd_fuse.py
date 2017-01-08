@@ -17,6 +17,8 @@ from time import time
 import ctypes.util
 import binascii
 
+import requests
+
 from acdcli.cache.db import CacheConsts
 
 ctypes.util.__find_library = ctypes.util.find_library
@@ -605,6 +607,17 @@ class ACDFuse(LoggingMixIn, Operations):
             self.cache.insert_node(r)
             node = self.cache.get_node(r['id'])
         except RequestError as e:
+            # file all ready exists, see what we know about it since the
+            # cache may be out of sync or amazon missed a rename
+            if e.status_code == requests.codes.conflict:
+                prior_node_id = json.loads(e.msg)["info"]["nodeId"]
+                logger.error('create: duplicate name: %s prior_node_id: %s' % (name, prior_node_id))
+                prior_node_amazon = self.acd_client.get_metadata(prior_node_id, False, False)
+                logger.error('create: prior_node(amazon): %s' % str(prior_node_amazon))
+                prior_node_cache = self.cache.get_node(prior_node_id)
+                logger.error('create: prior_node(cache): %s' % str(prior_node_cache))
+                # if prior_node_cache.name != prior_node_amazon["name"]:
+                #     self._rename(prior_node_id, prior_node_cache.name)
             FuseOSError.convert(e)
 
         with self.fh_lock:

@@ -228,22 +228,20 @@ class MetadataMixin(object):
 
     def move_node(self, node_id: str, parent_id: str) -> dict:
         properties = {'parents': [parent_id]}
-        # logger.debug('MOVE: parents: %s' % str([parent_id]))
+        logger.debug('move_node: node_id: %s parents: %s' % (node_id, str([parent_id])))
         while True:
             ret = self.update_metadata(node_id, properties)
-            metadata = self.get_metadata(node_id, False, False)
-            # logger.debug('MOVE: metadata: %s' % str(metadata))
-            if metadata['parents'] == [parent_id]: break
+            logger.debug('move_node: metadata: %s' % str(ret))
+            if ret['parents'] == [parent_id]: break
         return ret
 
     def rename_node(self, node_id: str, new_name: str) -> dict:
         properties = {'name': new_name}
-        # logger.debug('RENAME: new_name: %s' % new_name)
+        logger.debug('rename_node: node_id: %s new_name: %s' % (node_id, new_name))
         while True:
             ret = self.update_metadata(node_id, properties)
-            metadata = self.get_metadata(node_id, False, False)
-            # logger.debug('RENAME: metadata: %s' % str(metadata))
-            if metadata['name'] == new_name: break
+            logger.debug('rename_node: metadata: %s' % str(ret))
+            if ret['name'] == new_name: break
         return ret
 
     def set_available(self, node_id: str) -> dict:
