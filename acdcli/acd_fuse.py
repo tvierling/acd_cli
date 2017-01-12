@@ -52,6 +52,9 @@ except:
 _SETTINGS_FILENAME = 'fuse.ini'
 _XATTR_PROPERTY_NAME = 'xattrs'
 _XATTR_MTIME_OVERRIDE_NAME = 'fuse.mtime'
+_XATTR_MODE_OVERRIDE_NAME = 'fuse.mode'
+_XATTR_UID_OVERRIDE_NAME = 'fuse.uid'
+_XATTR_GID_OVERRIDE_NAME = 'fuse.gid'
 
 _def_conf = configparser.ConfigParser()
 _def_conf['read'] = dict(open_chunk_limit=10, timeout=5)
@@ -369,6 +372,12 @@ class ACDFuse(LoggingMixIn, Operations):
         """lock for fh counter increment and handle dict writes"""
         self.nlinks = kwargs.get('nlinks', False)
         """whether to calculate the number of hardlinks for folders"""
+        self.uid = kwargs['uid']
+        """sets the default uid"""
+        self.gid = kwargs['gid']
+        """sets the default gid"""
+        self.umask = kwargs['umask']
+        """sets the default umask"""
 
         self.destroyed = autosync.keywords['stop']
         """:type: multiprocessing.Event"""
@@ -411,19 +420,30 @@ class ACDFuse(LoggingMixIn, Operations):
         size = self.wp.length(node.id, fh)
         if not size: size = node.size
 
-        times = dict(st_atime=time(),
+        try: uid = self._getxattr(node.id, _XATTR_UID_OVERRIDE_NAME)
+        except: uid = self.uid
+
+        try: gid = self._getxattr(node.id, _XATTR_GID_OVERRIDE_NAME)
+        except: gid = self.gid
+
+        attrs = dict(st_atime=time(),
                      st_mtime=mtime,
-                     st_ctime=node.created.timestamp())
+                     st_ctime=node.created.timestamp(),
+                     st_uid=uid,
+                     st_gid=gid)
+
+        try: mode = stat.S_IMODE(self._getxattr(node.id, _XATTR_MODE_OVERRIDE_NAME))
+        except: mode = None
 
         if node.is_folder:
-            return dict(st_mode=stat.S_IFDIR | 0o0777,
+            return dict(st_mode=stat.S_IFDIR | (mode if mode else 0o0777 & ~self.umask),
                         st_nlink=self.cache.num_children(node.id) if self.nlinks else 1,
-                        **times)
+                        **attrs)
         elif node.is_file:
-            return dict(st_mode=stat.S_IFREG | 0o0666,
+            return dict(st_mode=stat.S_IFREG | (mode if mode else 0o0666 & ~self.umask),
                         st_nlink=self.cache.num_parents(node.id) if self.nlinks else 1,
                         st_size=size,
-                        **times)
+                        **attrs)
 
     def listxattr(self, path):
         node = self.cache.resolve(path)
@@ -450,7 +470,7 @@ class ACDFuse(LoggingMixIn, Operations):
         with self.xattr_cache_lock:
             try:
                 ret = self.xattr_cache[node_id][name]
-                if ret:
+                if ret is not None:
                     return ret
             except:
                 raise FuseOSError(errno.ENODATA)  # should be ENOATTR
@@ -548,9 +568,7 @@ class ACDFuse(LoggingMixIn, Operations):
                     )
 
     def mkdir(self, path, mode):
-        """Creates a directory at ``path`` (see :manpage:`mkdir(2)`).
-
-        :param mode: not used"""
+        """Creates a directory at ``path`` (see :manpage:`mkdir(2)`)."""
 
         name = os.path.basename(path)
         ppath = os.path.dirname(path)
@@ -564,6 +582,8 @@ class ACDFuse(LoggingMixIn, Operations):
             FuseOSError.convert(e)
         else:
             self.cache.insert_node(r)
+            node = self.cache.get_node(r['id'])
+            self._chmod(node, mode)
 
     def _trash(self, path):
         logger.debug('trash %s' % path)
@@ -593,7 +613,6 @@ class ACDFuse(LoggingMixIn, Operations):
     def create(self, path, mode) -> int:
         """Creates an empty file at ``path``.
 
-        :param mode: not used
         :returns int: file handle"""
 
         name = os.path.basename(path)
@@ -619,6 +638,8 @@ class ACDFuse(LoggingMixIn, Operations):
                 # if prior_node_cache.name != prior_node_amazon["name"]:
                 #     self._rename(prior_node_id, prior_node_cache.name)
             FuseOSError.convert(e)
+
+        self._chmod(node, mode)
 
         with self.fh_lock:
             self.fh += 1
@@ -791,12 +812,27 @@ class ACDFuse(LoggingMixIn, Operations):
         return 0
 
     def chmod(self, path, mode):
-        """Not implemented."""
-        pass
+        node = self.cache.resolve(path)
+        if not node:
+            raise FuseOSError(errno.ENOENT)
+        return self._chmod(node, mode)
+
+    def _chmod(self, node, mode):
+        self._setxattr(node.id, _XATTR_MODE_OVERRIDE_NAME, mode)
+        self._xattr_write_and_sync()
+        return 0
 
     def chown(self, path, uid, gid):
-        """Not implemented."""
-        pass
+        node = self.cache.resolve(path)
+        if not node:
+            raise FuseOSError(errno.ENOENT)
+        return self._chown(node, uid, gid)
+
+    def _chown(self, node, uid, gid):
+        if uid != -1: self._setxattr(node.id, _XATTR_UID_OVERRIDE_NAME, uid)
+        if gid != -1: self._setxattr(node.id, _XATTR_GID_OVERRIDE_NAME, gid)
+        self._xattr_write_and_sync()
+        return 0
 
 
 def mount(path: str, args: dict, **kwargs) -> 'Union[int, None]':

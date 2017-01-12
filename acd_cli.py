@@ -1147,11 +1147,14 @@ def mount_action(args: argparse.Namespace):
     import acdcli.acd_fuse
     acdcli.acd_fuse.mount(args.path, dict(acd_client=acd_client, cache=cache,
                                           nlinks=args.nlinks, autosync=asp,
-                                          settings_path=SETTINGS_PATH),
+                                          settings_path=SETTINGS_PATH,
+                                          umask = args.umask,
+                                          uid = args.uid,
+                                          gid = args.gid
+                                          ),
                           ro=args.read_only, foreground=args.foreground,
                           nothreads=args.single_threaded,
                           nonempty=args.nonempty, modules=args.modules,
-                          umask=args.umask,gid=args.gid,uid=args.uid,
                           allow_root=args.allow_root, allow_other=args.allow_other,
                           volname=args.volname)
 
