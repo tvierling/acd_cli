@@ -378,6 +378,8 @@ class ACDFuse(LoggingMixIn, Operations):
         """sets the default gid"""
         self.umask = kwargs['umask']
         """sets the default umask"""
+        self.blksize = self.acd_client._conf.getint('transfer', 'fs_chunk_size')
+        """size of the filesystem blocks for stat queries"""
 
         self.destroyed = autosync.keywords['stop']
         """:type: multiprocessing.Event"""
@@ -443,6 +445,8 @@ class ACDFuse(LoggingMixIn, Operations):
             return dict(st_mode=stat.S_IFREG | (mode if mode else 0o0666 & ~self.umask),
                         st_nlink=self.cache.num_parents(node.id) if self.nlinks else 1,
                         st_size=size,
+                        st_blksize=self.blksize,
+                        st_blocks=(node.size + 511) // 512,
                         **attrs)
 
     def listxattr(self, path):
@@ -558,12 +562,11 @@ class ACDFuse(LoggingMixIn, Operations):
     def statfs(self, path) -> dict:
         """Gets some filesystem statistics as specified in :manpage:`stat(2)`."""
 
-        bs = 512 * 1024  # no effect?
-        return dict(f_bsize=bs,
-                    f_frsize=bs,
-                    f_blocks=self.total // bs,  # total no of blocks
-                    f_bfree=self.free // bs,  # free blocks
-                    f_bavail=self.free // bs,
+        return dict(f_bsize=self.blksize,
+                    f_frsize=self.blksize,
+                    f_blocks=self.total // self.blksize,  # total no of blocks
+                    f_bfree=self.free // self.blksize,  # free blocks
+                    f_bavail=self.free // self.blksize,
                     f_namemax=256
                     )
 
