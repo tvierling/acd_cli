@@ -415,7 +415,9 @@ class ACDFuse(LoggingMixIn, Operations):
             node = self.cache.resolve(path)
         if not node:
             raise FuseOSError(errno.ENOENT)
+        return self._getattr(node, fh)
 
+    def _getattr(self, node, fh=None) -> dict:
         try: mtime = self._getxattr(node.id, _XATTR_MTIME_OVERRIDE_NAME)
         except: mtime = node.modified.timestamp()
 
@@ -434,15 +436,23 @@ class ACDFuse(LoggingMixIn, Operations):
                      st_uid=uid,
                      st_gid=gid)
 
-        try: mode = stat.S_IMODE(self._getxattr(node.id, _XATTR_MODE_OVERRIDE_NAME))
+        try: mode = self._getxattr(node.id, _XATTR_MODE_OVERRIDE_NAME)
         except: mode = None
 
         if node.is_folder:
-            return dict(st_mode=stat.S_IFDIR | (mode if mode else 0o0777 & ~self.umask),
+            # directory
+            mode = stat.S_IFDIR | (stat.S_IMODE(mode) if mode else 0o0777 & ~self.umask)
+
+            return dict(st_mode=mode,
                         st_nlink=self.cache.num_children(node.id) if self.nlinks else 1,
                         **attrs)
         elif node.is_file:
-            return dict(st_mode=stat.S_IFREG | (mode if mode else 0o0666 & ~self.umask),
+            # symlink
+            if mode and stat.S_ISLNK(stat.S_IFMT(mode)): mode = stat.S_IFLNK | 0o0777
+            # file
+            else: mode = stat.S_IFREG | (stat.S_IMODE(mode) if mode else 0o0666 & ~self.umask)
+
+            return dict(st_mode=mode,
                         st_nlink=self.cache.num_parents(node.id) if self.nlinks else 1,
                         st_size=size,
                         st_blksize=self.blksize,
@@ -536,7 +546,7 @@ class ACDFuse(LoggingMixIn, Operations):
                     logger.debug('_xattr_write_and_sync: node: %s xattrs: %s: ' % (node_id, xattrs_str))
             self.xattr_dirty.clear()
 
-    def read(self, path, length, offset, fh) -> bytes:
+    def read(self, path, length, offset, fh=None) -> bytes:
         """Read ```length`` bytes from ``path`` at ``offset``."""
 
         if fh:
@@ -642,7 +652,8 @@ class ACDFuse(LoggingMixIn, Operations):
                 #     self._rename(prior_node_id, prior_node_cache.name)
             FuseOSError.convert(e)
 
-        self._chmod(node, mode)
+        if mode is not None:
+            self._chmod(node, mode)
 
         with self.fh_lock:
             self.fh += 1
@@ -821,7 +832,9 @@ class ACDFuse(LoggingMixIn, Operations):
         return self._chmod(node, mode)
 
     def _chmod(self, node, mode):
-        self._setxattr(node.id, _XATTR_MODE_OVERRIDE_NAME, mode)
+        mode_perms = stat.S_IMODE(mode)
+        mode_type = stat.S_IFMT(self._getattr(node)['st_mode'])
+        self._setxattr(node.id, _XATTR_MODE_OVERRIDE_NAME, mode_type | mode_perms)
         self._xattr_write_and_sync()
         return 0
 
@@ -836,6 +849,23 @@ class ACDFuse(LoggingMixIn, Operations):
         if gid != -1: self._setxattr(node.id, _XATTR_GID_OVERRIDE_NAME, gid)
         self._xattr_write_and_sync()
         return 0
+
+    def symlink(self, target, source):
+        fh = self.create(target, None)
+        node = self.handles[fh]
+        self._setxattr(node.id, _XATTR_MODE_OVERRIDE_NAME, stat.S_IFLNK | 0o0777)
+        # While it may be tempting to store the link's source in xattr space, note that encrypting file
+        # systems like gocryptfs pass xattrs straight through to the native file system; so amazon would
+        # have a look at unencrypted file names via links. So we must place this in the contents.
+        #TODO: have a cache of node -> link source somewhere in sql and memory so we don't need to read from amazon
+        self.write(target, source.encode('utf-8'), 0, fh)
+        self.release(target, fh)
+        return 0
+
+    def readlink(self, path):
+        attr = self.getattr(path)
+        source = self.read(path, attr['st_size'], 0).decode('utf-8')
+        return source
 
 
 def mount(path: str, args: dict, **kwargs) -> 'Union[int, None]':
