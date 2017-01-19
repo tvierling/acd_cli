@@ -55,6 +55,7 @@ _XATTR_MTIME_OVERRIDE_NAME = 'fuse.mtime'
 _XATTR_MODE_OVERRIDE_NAME = 'fuse.mode'
 _XATTR_UID_OVERRIDE_NAME = 'fuse.uid'
 _XATTR_GID_OVERRIDE_NAME = 'fuse.gid'
+_XATTR_SYMLINK_OVERRIDE_NAME = 'fuse.symlink'
 
 _def_conf = configparser.ConfigParser()
 _def_conf['read'] = dict(open_chunk_limit=10, timeout=5)
@@ -854,17 +855,15 @@ class ACDFuse(LoggingMixIn, Operations):
         fh = self.create(target, None)
         node = self.handles[fh]
         self._setxattr(node.id, _XATTR_MODE_OVERRIDE_NAME, stat.S_IFLNK | 0o0777)
-        # While it may be tempting to store the link's source in xattr space, note that encrypting file
-        # systems like gocryptfs pass xattrs straight through to the native file system; so amazon would
-        # have a look at unencrypted file names via links. So we must place this in the contents.
-        #TODO: have a cache of node -> link source somewhere in sql and memory so we don't need to read from amazon
-        self.write(target, source.encode('utf-8'), 0, fh)
+        self._setxattr(node.id, _XATTR_SYMLINK_OVERRIDE_NAME, source)
         self.release(target, fh)
         return 0
 
     def readlink(self, path):
-        attr = self.getattr(path)
-        source = self.read(path, attr['st_size'], 0).decode('utf-8')
+        node = self.cache.resolve(path)
+        if not node:
+            raise FuseOSError(errno.ENOENT)
+        source = self._getxattr(node.id, _XATTR_SYMLINK_OVERRIDE_NAME)
         return source
 
 
