@@ -47,13 +47,21 @@ class SyncMixin(object):
 
         logger.info('Purged %i node(s).' % len(purged))
 
-    def insert_nodes(self, nodes: list, partial=True):
-        """Inserts mixed list of files and folders into cache."""
-
-        """Flush the path cache since these new nodes may be deletes, moves, or renames
-        that affect the path cache, or overwrites that would invalidate the data in it."""
+    def cache_flush(self):
         with self.path_to_node_cache_lock:
             self.path_to_node_cache.clear()
+            logger.warning("path_to_node_cache flushed")
+
+    def cache_del(self, path:str):
+        with self.path_to_node_cache_lock:
+            try: del self.path_to_node_cache[path]
+            except: pass
+
+    def insert_nodes(self, nodes: list, partial:bool=True, flush_cache:bool=True):
+        """Inserts mixed list of files and folders into cache."""
+
+        if flush_cache:
+            self.cache_flush()
 
         files = []
         folders = []
@@ -81,11 +89,11 @@ class SyncMixin(object):
         self.insert_parentage(files + folders, partial)
         self.insert_properties(files + folders)
 
-    def insert_node(self, node: dict):
+    def insert_node(self, node:dict, flush_cache:bool=True):
         """Inserts single file or folder into cache."""
         if not node:
             return
-        self.insert_nodes([node])
+        self.insert_nodes([node], flush_cache=flush_cache)
 
     def insert_folders(self, folders: list):
         """ Inserts list of folders into cache. Sets 'update' column to current date.
