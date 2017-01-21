@@ -222,12 +222,14 @@ class ContentMixin(object):
 
         :param file: readable and seekable object"""
 
+        # If we're writing 0 bytes, clear instead
+        file.seek(0, os.SEEK_END)
+        if file.tell() == 0:
+            return self.clear_file(node_id)
+
         while True:
             # logger.debug('OVERWRITE: node_id: %s' % node_id)
             file.seek(0)
-
-            if _stream_is_empty(file):
-                return self.clear_file(node_id)
 
             metadata = {}
             import uuid

@@ -50,7 +50,6 @@ class SyncMixin(object):
     def cache_flush(self):
         with self.path_to_node_cache_lock:
             self.path_to_node_cache.clear()
-            logger.warning("path_to_node_cache flushed")
 
     def cache_del(self, path:str):
         with self.path_to_node_cache_lock:
