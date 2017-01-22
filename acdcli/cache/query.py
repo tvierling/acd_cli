@@ -142,6 +142,10 @@ class Node(object):
 
 
 class QueryMixin(object):
+    def resolve_cache_add(self, path:str, node:Node):
+        with self.path_to_node_cache_lock:
+            self.path_to_node_cache[path] = node
+
     def get_node(self, id) -> 'Union[Node|None]':
         with cursor(self._conn) as c:
             c.execute(NODE_BY_ID_SQL, [id])

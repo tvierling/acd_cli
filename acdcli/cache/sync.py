@@ -47,11 +47,11 @@ class SyncMixin(object):
 
         logger.info('Purged %i node(s).' % len(purged))
 
-    def cache_flush(self):
+    def resolve_cache_flush(self):
         with self.path_to_node_cache_lock:
             self.path_to_node_cache.clear()
 
-    def cache_del(self, path:str):
+    def resolve_cache_del(self, path:str):
         with self.path_to_node_cache_lock:
             try: del self.path_to_node_cache[path]
             except: pass
@@ -60,7 +60,7 @@ class SyncMixin(object):
         """Inserts mixed list of files and folders into cache."""
 
         if flush_cache:
-            self.cache_flush()
+            self.resolve_cache_flush()
 
         files = []
         folders = []

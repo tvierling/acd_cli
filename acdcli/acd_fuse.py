@@ -597,6 +597,7 @@ class ACDFuse(LoggingMixIn, Operations):
         else:
             self.cache.insert_node(r, flush_cache=False)
             node = self.cache.get_node(r['id'])
+            self.cache.resolve_cache_add(path, node)
             self._chmod(node, mode)
 
     def _trash(self, path):
@@ -614,11 +615,8 @@ class ACDFuse(LoggingMixIn, Operations):
         except RequestError as e:
             FuseOSError.convert(e)
         else:
-            if node.is_file:
-                self.cache.insert_node(r, flush_cache=False)
-                self.cache.cache_del(path)
-            else:
-                self.cache.insert_node(r)
+            self.cache.insert_node(r, not node.is_file)
+            self.cache.resolve_cache_del(path)
 
     def rmdir(self, path):
         """Moves a directory into ACD trash."""
@@ -643,6 +641,7 @@ class ACDFuse(LoggingMixIn, Operations):
             r = self.acd_client.create_file(name, p.id)
             self.cache.insert_node(r, flush_cache=False)
             node = self.cache.get_node(r['id'])
+            self.cache.resolve_cache_add(path, node)
         except RequestError as e:
             # file all ready exists, see what we know about it since the
             # cache may be out of sync or amazon missed a rename
@@ -702,7 +701,7 @@ class ACDFuse(LoggingMixIn, Operations):
             self._move(node.id, ndir.id, not node.is_file)
 
         if node.is_file:
-            self.cache.cache_del(old)
+            self.cache.resolve_cache_del(old)
 
     def _rename(self, id, name, flush_cache:bool=True):
         try:
