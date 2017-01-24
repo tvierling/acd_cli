@@ -263,7 +263,7 @@ class WriteProxy(object):
         except (RequestError, IOError) as e:
             logger.error('Error writing node "%s". %s' % (node_id, str(e)))
         else:
-            self.cache.insert_node(r, flush_cache=False)
+            self.cache.insert_node(r)
 
     def read(self, node_id, fh, offset, length: int):
         b = self.buffers.get(node_id)
@@ -595,9 +595,8 @@ class ACDFuse(LoggingMixIn, Operations):
         except RequestError as e:
             FuseOSError.convert(e)
         else:
-            self.cache.insert_node(r, flush_cache=False)
+            self.cache.insert_node(r)
             node = self.cache.get_node(r['id'])
-            self.cache.resolve_cache_add(path, node)
             self._chmod(node, mode)
 
     def _trash(self, path):
@@ -615,8 +614,7 @@ class ACDFuse(LoggingMixIn, Operations):
         except RequestError as e:
             FuseOSError.convert(e)
         else:
-            self.cache.insert_node(r, not node.is_file)
-            self.cache.resolve_cache_del(path)
+            self.cache.insert_node(r)
 
     def rmdir(self, path):
         """Moves a directory into ACD trash."""
@@ -639,9 +637,8 @@ class ACDFuse(LoggingMixIn, Operations):
 
         try:
             r = self.acd_client.create_file(name, p.id)
-            self.cache.insert_node(r, flush_cache=False)
+            self.cache.insert_node(r)
             node = self.cache.get_node(r['id'])
-            self.cache.resolve_cache_add(path, node)
         except RequestError as e:
             # file all ready exists, see what we know about it since the
             # cache may be out of sync or amazon missed a rename
@@ -691,33 +688,30 @@ class ACDFuse(LoggingMixIn, Operations):
                 raise FuseOSError(errno.EEXIST)
 
         if new_bn != old_bn:
-            self._rename(node.id, new_bn, not node.is_file)
+            self._rename(node.id, new_bn)
 
         if new_dn != old_dn:
             # odir_id = self.cache.resolve_path(old_dn, False)
             ndir = self.cache.resolve(new_dn, False)
             if not ndir:
                 raise FuseOSError(errno.ENOTDIR)
-            self._move(node.id, ndir.id, not node.is_file)
+            self._move(node.id, ndir.id)
 
-        if node.is_file:
-            self.cache.resolve_cache_del(old)
-
-    def _rename(self, id, name, flush_cache:bool=True):
+    def _rename(self, id, name):
         try:
             r = self.acd_client.rename_node(id, name)
         except RequestError as e:
             FuseOSError.convert(e)
         else:
-            self.cache.insert_node(r, flush_cache=flush_cache)
+            self.cache.insert_node(r)
 
-    def _move(self, id, new_folder, flush_cache:bool=True):
+    def _move(self, id, new_folder):
         try:
             r = self.acd_client.move_node(id, new_folder)
         except RequestError as e:
             FuseOSError.convert(e)
         else:
-            self.cache.insert_node(r, flush_cache=flush_cache)
+            self.cache.insert_node(r)
 
     def open(self, path, flags) -> int:
         """Opens a file.
@@ -774,7 +768,7 @@ class ACDFuse(LoggingMixIn, Operations):
             except RequestError as e:
                 raise FuseOSError.convert(e)
             else:
-                self.cache.insert_node(r, flush_cache=False)
+                self.cache.insert_node(r)
 
         """No good way to deal with positive lengths at the moment; since we can only do
         something about it in the middle of writing, this means the only use case we can
