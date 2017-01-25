@@ -69,6 +69,11 @@ class NodeCache(SchemaMixin, QueryMixin, SyncMixin, FormatterMixin):
 
         self._conn.create_function('REGEXP', _regex_match.__code__.co_argcount, _regex_match)
 
+        self.path_to_node_cache = {}
+        self.path_to_node_cache_lock = Lock()
+        """There are a huge number of repeated path lookups,
+        so cache results and invalidate on new nodes."""
+
         with cursor(self._conn) as c:
             c.execute(_ROOT_ID_SQL)
             row = c.fetchone()

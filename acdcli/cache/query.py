@@ -161,6 +161,19 @@ class QueryMixin(object):
                 return Node(r)
 
     def resolve(self, path: str, trash=False) -> 'Union[Node|None]':
+        """Gets a node from a path"""
+        with self.path_to_node_cache_lock:
+            try:
+                return self.path_to_node_cache[path]
+            except:
+                pass
+            n = self._resolve(path, trash)
+            if n:
+                self.path_to_node_cache[path] = n
+                return n
+            return None
+
+    def _resolve(self, path: str, trash=False) -> 'Union[Node|None]':
         segments = list(filter(bool, path.split('/')))
         if not segments:
             if not self.root_id:
@@ -265,6 +278,13 @@ class QueryMixin(object):
                     elif node.is_folder:
                         folders.append(node)
                 node = c.fetchone()
+
+        """If the caller provides the folder_path, we can add all the children to the
+        path->node_id cache for faster lookup after a directory listing"""
+        if folder_path:
+            with self.path_to_node_cache_lock:
+                for c in folders + files:
+                    self.path_to_node_cache[folder_path + '/' + c.name] = c
 
         return folders, files
 
