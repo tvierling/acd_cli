@@ -308,7 +308,7 @@ class LoggingMixIn(object):
         elif op == 'chmod':
             targs = (oct(args[0]),) + args[1:]
         elif op == 'setxattr':
-            targs = (len(args[0]),) + args[1:]
+            targs = (args[0],) + (len(args[1]),)
 
         logger.debug('-> %s %s %s', op, path, repr(args if not targs else targs))
 
@@ -365,8 +365,8 @@ class ACDFuse(LoggingMixIn, Operations):
         """manually calculated available disk space"""
         self.fh = 1
         """file handle counter\n\n :type: int"""
-        self.handles = {}
-        """map fh->node\n\n :type: dict"""
+        self.fh_to_node = {}
+        """map fh->node_id\n\n :type: dict"""
         self.node_to_fh = defaultdict(lambda: set())
         """map node_id to list of interested file handles"""
         self.fh_lock = Lock()
@@ -411,7 +411,8 @@ class ACDFuse(LoggingMixIn, Operations):
         Calculates correct number of links for folders if :attr:`nlinks` is set."""
 
         if fh:
-            node = self.handles[fh]
+            node_id = self.fh_to_node[fh]
+            node = self.cache.get_node(node_id)
         else:
             node = self.cache.resolve(path)
         if not node:
@@ -457,14 +458,14 @@ class ACDFuse(LoggingMixIn, Operations):
                         st_nlink=self.cache.num_parents(node.id) if self.nlinks else 1,
                         st_size=size,
                         st_blksize=self.blksize,
-                        st_blocks=(node.size + 511) // 512,
+                        st_blocks=(size + 511) // 512,
                         **attrs)
 
     def listxattr(self, path):
-        node = self.cache.resolve(path)
-        if not node:
+        node_id = self.cache.resolve_id(path)
+        if not node_id:
             raise FuseOSError(errno.ENOENT)
-        return self._listxattr(node.id)
+        return self._listxattr(node_id)
 
     def _listxattr(self, node_id):
         self._xattr_load(node_id)
@@ -475,10 +476,10 @@ class ACDFuse(LoggingMixIn, Operations):
                 return []
 
     def getxattr(self, path, name, position=0):
-        node = self.cache.resolve(path)
-        if not node:
+        node_id = self.cache.resolve_id(path)
+        if not node_id:
             raise FuseOSError(errno.ENOENT)
-        return self._getxattr_bytes(node.id, name)
+        return self._getxattr_bytes(node_id, name)
 
     def _getxattr(self, node_id, name):
         self._xattr_load(node_id)
@@ -496,10 +497,10 @@ class ACDFuse(LoggingMixIn, Operations):
         return binascii.a2b_base64(self._getxattr(node_id, name))
 
     def removexattr(self, path, name):
-        node = self.cache.resolve(path)
-        if not node:
+        node_id = self.cache.resolve_id(path)
+        if not node_id:
             raise FuseOSError(errno.ENOENT)
-        self._removexattr(node.id, name)
+        self._removexattr(node_id, name)
 
     def _removexattr(self, node_id, name):
         self._xattr_load(node_id)
@@ -509,10 +510,10 @@ class ACDFuse(LoggingMixIn, Operations):
                 self.properties_dirty.add(node_id)
 
     def setxattr(self, path, name, value, options, position=0):
-        node = self.cache.resolve(path)
-        if not node:
+        node_id = self.cache.resolve_id(path)
+        if not node_id:
             raise FuseOSError(errno.ENOENT)
-        self._setxattr_bytes(node.id, name, value)
+        self._setxattr_bytes(node_id, name, value)
 
     def _setxattr(self, node_id, name, value):
         self._xattr_load(node_id)
@@ -551,21 +552,25 @@ class ACDFuse(LoggingMixIn, Operations):
         """Read ```length`` bytes from ``path`` at ``offset``."""
 
         if fh:
-            node = self.handles[fh]
+            node_id = self.fh_to_node[fh]
+            node = self.cache.get_node(node_id)
         else:
             node = self.cache.resolve(path, trash=False)
         if not node:
             raise FuseOSError(errno.ENOENT)
 
-        if node.size <= offset:
+        size = self.wp.length(node.id, fh)
+        if size is None: size = node.size
+
+        if size <= offset:
             return b''
 
-        if node.size < offset + length:
-            length = node.size - offset
+        if size < offset + length:
+            length = size - offset
 
         """If we attempt to read something we just wrote, give it back"""
         ret = self.wp.read(node.id, fh, offset, length)
-        if ret and len(ret) == length:
+        if ret is not None:
             return ret
 
         return self.rp.get(node.id, offset, length, node.size)
@@ -586,12 +591,12 @@ class ACDFuse(LoggingMixIn, Operations):
 
         name = os.path.basename(path)
         ppath = os.path.dirname(path)
-        p = self.cache.resolve(ppath)
-        if not p:
+        p_id = self.cache.resolve_id(ppath)
+        if not p_id:
             raise FuseOSError(errno.ENOTDIR)
 
         try:
-            r = self.acd_client.create_folder(name, p.id)
+            r = self.acd_client.create_folder(name, p_id)
         except RequestError as e:
             FuseOSError.convert(e)
         else:
@@ -632,14 +637,14 @@ class ACDFuse(LoggingMixIn, Operations):
 
         name = os.path.basename(path)
         ppath = os.path.dirname(path)
-        p = self.cache.resolve(ppath, False)
-        if not p:
+        p_id = self.cache.resolve_id(ppath, False)
+        if not p_id:
             raise FuseOSError(errno.ENOTDIR)
 
         try:
-            r = self.acd_client.create_file(name, p.id)
+            r = self.acd_client.create_file(name, p_id)
             self.cache.insert_node(r, flush_resolve_cache=False)
-            node = self.cache.get_node(r['id'])
+            node_id = r['id']
         except RequestError as e:
             # file all ready exists, see what we know about it since the
             # cache may be out of sync or amazon missed a rename
@@ -655,12 +660,12 @@ class ACDFuse(LoggingMixIn, Operations):
             FuseOSError.convert(e)
 
         if mode is not None:
-            self._chmod(node, mode)
+            self._setxattr(node_id, _XATTR_MODE_OVERRIDE_NAME, stat.S_IFREG | (stat.S_IMODE(mode)))
 
         with self.fh_lock:
             self.fh += 1
-            self.handles[self.fh] = node
-            self.node_to_fh[node.id].add(self.fh)
+            self.fh_to_node[self.fh] = node_id
+            self.node_to_fh[node_id].add(self.fh)
         return self.fh
 
     def rename(self, old, new):
@@ -725,13 +730,13 @@ class ACDFuse(LoggingMixIn, Operations):
         if (flags & os.O_APPEND) == os.O_APPEND:
             raise FuseOSError(errno.EFAULT)
 
-        node = self.cache.resolve(path, False)
-        if not node:
+        node_id = self.cache.resolve_id(path, False)
+        if not node_id:
             raise FuseOSError(errno.ENOENT)
         with self.fh_lock:
             self.fh += 1
-            self.handles[self.fh] = node
-            self.node_to_fh[node.id].add(self.fh)
+            self.fh_to_node[self.fh] = node_id
+            self.node_to_fh[node_id].add(self.fh)
         return self.fh
 
     def write(self, path, data, offset, fh) -> int:
@@ -739,18 +744,18 @@ class ACDFuse(LoggingMixIn, Operations):
 
         :returns: number of bytes written"""
 
-        node_id = self.handles[fh].id
+        node_id = self.fh_to_node[fh]
         self.wp.write(node_id, fh, offset, data)
         return len(data)
 
     def flush(self, path, fh):
         if fh:
-            node = self.handles[fh]
+            node_id = self.fh_to_node[fh]
         else:
-            node = self.cache.resolve(path)
-        if not node:
+            node_id = self.cache.resolve_id(path)
+        if not node_id:
             raise FuseOSError(errno.ENOENT)
-        self.wp.flush(node.id, fh)
+        self.wp.flush(node_id, fh)
 
     def truncate(self, path, length, fh=None):
         """Pseudo-truncates a file, i.e. clears content if ``length``==0 or does nothing
@@ -759,15 +764,15 @@ class ACDFuse(LoggingMixIn, Operations):
         :raises FuseOSError: if pseudo-truncation to length is not supported"""
 
         if fh:
-            node = self.handles[fh]
+            node_id = self.fh_to_node[fh]
         else:
-            node = self.cache.resolve(path)
-        if not node:
+            node_id = self.cache.resolve_id(path)
+        if not node_id:
             raise FuseOSError(errno.ENOENT)
 
         if length == 0:
             try:
-                r = self.acd_client.clear_file(node.id)
+                r = self.acd_client.clear_file(node_id)
             except RequestError as e:
                 raise FuseOSError.convert(e)
             else:
@@ -782,24 +787,24 @@ class ACDFuse(LoggingMixIn, Operations):
         """Releases an open ``path``."""
 
         if fh:
-            node = self.handles[fh]
+            node_id = self.fh_to_node[fh]
         else:
-            node = self.cache.resolve(path, trash=False)
-        if node:
-            self.rp.release(node.id)
+            node_id = self.cache.resolve_id(path)
+        if node_id:
+            self.rp.release(node_id)
             with self.fh_lock:
                 """release the writer if there's no more interest. This allows many file
                 handles to write to a single node provided they do it in order, enabling
                 sequential writes using mmap.
                 """
-                interest = self.node_to_fh.get(node.id)
+                interest = self.node_to_fh.get(node_id)
                 if interest:
                     interest.discard(fh)
                 if not interest:
-                    self.wp.release(node.id, fh)
+                    self.wp.release(node_id, fh)
                     self._xattr_write_and_sync()
-                    del self.node_to_fh[node.id]
-                del self.handles[fh]
+                    del self.node_to_fh[node_id]
+                del self.fh_to_node[fh]
         else:
             raise FuseOSError(errno.ENOENT)
 
@@ -810,8 +815,8 @@ class ACDFuse(LoggingMixIn, Operations):
 
         :param times: [atime, mtime]"""
 
-        node = self.cache.resolve(path)
-        if not node:
+        node_id = self.cache.resolve_id(path)
+        if not node_id:
             raise FuseOSError(errno.ENOENT)
 
         if times:
@@ -822,7 +827,7 @@ class ACDFuse(LoggingMixIn, Operations):
             mtime = time()
 
         try:
-            self._setxattr(node.id, _XATTR_MTIME_OVERRIDE_NAME, mtime)
+            self._setxattr(node_id, _XATTR_MTIME_OVERRIDE_NAME, mtime)
             self._xattr_write_and_sync()
         except:
             raise FuseOSError(errno.ENOTSUP)
@@ -843,30 +848,30 @@ class ACDFuse(LoggingMixIn, Operations):
         return 0
 
     def chown(self, path, uid, gid):
-        node = self.cache.resolve(path)
-        if not node:
+        node_id = self.cache.resolve_id(path)
+        if not node_id:
             raise FuseOSError(errno.ENOENT)
-        return self._chown(node, uid, gid)
+        return self._chown(node_id, uid, gid)
 
-    def _chown(self, node, uid, gid):
-        if uid != -1: self._setxattr(node.id, _XATTR_UID_OVERRIDE_NAME, uid)
-        if gid != -1: self._setxattr(node.id, _XATTR_GID_OVERRIDE_NAME, gid)
+    def _chown(self, node_id, uid, gid):
+        if uid != -1: self._setxattr(node_id, _XATTR_UID_OVERRIDE_NAME, uid)
+        if gid != -1: self._setxattr(node_id, _XATTR_GID_OVERRIDE_NAME, gid)
         self._xattr_write_and_sync()
         return 0
 
     def symlink(self, target, source):
         fh = self.create(target, None)
-        node = self.handles[fh]
-        self._setxattr(node.id, _XATTR_MODE_OVERRIDE_NAME, stat.S_IFLNK | 0o0777)
-        self._setxattr(node.id, _XATTR_SYMLINK_OVERRIDE_NAME, source)
+        node_id = self.fh_to_node[fh]
+        self._setxattr(node_id, _XATTR_MODE_OVERRIDE_NAME, stat.S_IFLNK | 0o0777)
+        self._setxattr(node_id, _XATTR_SYMLINK_OVERRIDE_NAME, source)
         self.release(target, fh)
         return 0
 
     def readlink(self, path):
-        node = self.cache.resolve(path)
-        if not node:
+        node_id = self.cache.resolve_id(path)
+        if not node_id:
             raise FuseOSError(errno.ENOENT)
-        source = self._getxattr(node.id, _XATTR_SYMLINK_OVERRIDE_NAME)
+        source = self._getxattr(node_id, _XATTR_SYMLINK_OVERRIDE_NAME)
         return source
 
 

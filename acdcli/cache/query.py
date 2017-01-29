@@ -160,16 +160,29 @@ class QueryMixin(object):
             if r:
                 return Node(r)
 
-    def resolve(self, path: str, trash=False) -> 'Union[Node|None]':
-        """Gets a node from a path"""
-        with self.path_to_node_cache_lock:
+    def resolve_id(self, path: str, trash=False) -> str:
+        with self.path_to_node_id_cache_lock:
             try:
-                return self.path_to_node_cache[path]
+                return self.path_to_node_id_cache[path]
             except:
                 pass
             n = self._resolve(path, trash)
             if n:
-                self.path_to_node_cache[path] = n
+                self.path_to_node_id_cache[path] = n.id
+                return n.id
+            return None
+
+    def resolve(self, path: str, trash=False) -> 'Union[Node|None]':
+        """Gets a node from a path"""
+        with self.path_to_node_id_cache_lock:
+            try:
+                node_id = self.path_to_node_id_cache[path]
+                return self.get_node(node_id)
+            except:
+                pass
+            n = self._resolve(path, trash)
+            if n:
+                self.path_to_node_id_cache[path] = n.id
                 return n
             return None
 
@@ -282,9 +295,9 @@ class QueryMixin(object):
         """If the caller provides the folder_path, we can add all the children to the
         path->node_id cache for faster lookup after a directory listing"""
         if folder_path:
-            with self.path_to_node_cache_lock:
+            with self.path_to_node_id_cache_lock:
                 for c in folders + files:
-                    self.path_to_node_cache[folder_path + '/' + c.name] = c
+                    self.path_to_node_id_cache[folder_path + '/' + c.name] = c.id
 
         return folders, files
 
