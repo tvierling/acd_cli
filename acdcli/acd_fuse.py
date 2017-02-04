@@ -225,6 +225,7 @@ class WriteProxy(object):
             self.f = tempfile.SpooledTemporaryFile(max_size=buffer_size)
             self.lock = Lock()
             self.dirty = True
+            self.len = 0
 
         def read(self, offset, length: int):
             with self.lock:
@@ -234,19 +235,17 @@ class WriteProxy(object):
         def write(self, offset, bytes_: bytes):
             with self.lock:
                 self.dirty = True
-                self.f.seek(0, os.SEEK_END)
-                old_len = self.f.tell()
-                if offset > old_len:
+                if offset > self.len:
                     logger.error('Wrong offset for writing to buffer; writing gap detected')
                     raise FuseOSError(errno.ESPIPE)
                 self.f.seek(offset)
-                self.f.write(bytes_)
-                return old_len
+                ret = self.f.write(bytes_)
+                self.f.seek(0, os.SEEK_END)
+                self.len = self.f.tell()
+                return ret
 
         def length(self):
-            with self.lock:
-                self.f.seek(0, os.SEEK_END)
-                return self.f.tell()
+            return self.len
 
         def get_file(self):
             """Return the file for direct access. Be sure to lock from the outside when doing so"""
@@ -424,7 +423,7 @@ class ACDFuse(LoggingMixIn, Operations):
         except: mtime = node.modified.timestamp()
 
         size = self.wp.length(node.id, fh)
-        if not size: size = node.size
+        if size is None: size = node.size
 
         try: uid = self._getxattr(node.id, _XATTR_UID_OVERRIDE_NAME)
         except: uid = self.uid
