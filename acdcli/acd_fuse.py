@@ -544,7 +544,6 @@ class ACDFuse(LoggingMixIn, Operations):
                     logger.error('Error writing node xattrs "%s". %s' % (node_id, str(e)))
                 else:
                     self.cache.insert_property(node_id, self.acd_client_owner, _XATTR_PROPERTY_NAME, xattrs_str)
-                    logger.debug('_xattr_write_and_sync: node: %s xattrs: %s: ' % (node_id, xattrs_str))
             self.xattr_dirty.clear()
 
     def read(self, path, length, offset, fh=None) -> bytes:
@@ -600,8 +599,11 @@ class ACDFuse(LoggingMixIn, Operations):
             FuseOSError.convert(e)
         else:
             self.cache.insert_node(r, flush_resolve_cache=False)
-            node = self.cache.get_node(r['id'])
-            self._chmod(node, mode)
+            node_id = r['id']
+            self.cache.resolve_cache_add(path, node_id)
+            if mode is not None:
+                self._setxattr(node_id, _XATTR_MODE_OVERRIDE_NAME, stat.S_IFDIR | (stat.S_IMODE(mode)))
+                self._xattr_write_and_sync()
 
     def _trash(self, path):
         logger.debug('trash %s' % path)
@@ -644,6 +646,7 @@ class ACDFuse(LoggingMixIn, Operations):
             r = self.acd_client.create_file(name, p_id)
             self.cache.insert_node(r, flush_resolve_cache=False)
             node_id = r['id']
+            self.cache.resolve_cache_add(path, node_id)
         except RequestError as e:
             # file all ready exists, see what we know about it since the
             # cache may be out of sync or amazon missed a rename
@@ -703,6 +706,8 @@ class ACDFuse(LoggingMixIn, Operations):
             if not ndir:
                 raise FuseOSError(errno.ENOTDIR)
             self._move(node, ndir.id)
+
+        self.cache.resolve_cache_add(new, node.id)
 
     def _rename(self, node, name):
         try:

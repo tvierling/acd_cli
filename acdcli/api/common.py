@@ -16,6 +16,7 @@ except ImportError:
 OK_CODES = [requests.codes.OK]
 RETRY_CODES = [requests.codes.server_error,
                requests.codes.gateway_timeout,
+               requests.codes.request_timeout,
                requests.codes.bad_request,
                requests.codes.service_unavailable]
 

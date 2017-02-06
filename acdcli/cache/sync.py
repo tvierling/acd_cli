@@ -47,6 +47,10 @@ class SyncMixin(object):
 
         logger.info('Purged %i node(s).' % len(purged))
 
+    def resolve_cache_add(self, path:str, node_id:str):
+        with self.path_to_node_id_cache_lock:
+            self.path_to_node_id_cache[path] = node_id
+
     def resolve_cache_del(self, path:str):
         with self.path_to_node_id_cache_lock:
             try: del self.path_to_node_id_cache[path]
