@@ -488,9 +488,8 @@ class ACDFuse(LoggingMixIn, Operations):
                 if ret is not None:
                     return ret
             except:
-                raise FuseOSError(errno.ENODATA)  # should be ENOATTR
-            else:
-                raise FuseOSError(errno.ENODATA)  # should be ENOATTR
+                pass
+            raise FuseOSError(errno.ENODATA)  # should be ENOATTR
 
     def _getxattr_bytes(self, node_id, name):
         return binascii.a2b_base64(self._getxattr(node_id, name))
@@ -748,18 +747,15 @@ class ACDFuse(LoggingMixIn, Operations):
 
         :returns: number of bytes written"""
 
-        node_id = self.fh_to_node[fh]
-        self.wp.write(node_id, fh, offset, data)
-        return len(data)
-
-    def flush(self, path, fh):
         if fh:
             node_id = self.fh_to_node[fh]
-        else:
-            node_id = self.cache.resolve_id(path)
+        # This is not resolving by path on purpose, since flushing to
+        # amazon is done on closing all interested file handles.
         if not node_id:
             raise FuseOSError(errno.ENOENT)
-        self.wp.flush(node_id, fh)
+
+        self.wp.write(node_id, fh, offset, data)
+        return len(data)
 
     def truncate(self, path, length, fh=None):
         """Pseudo-truncates a file, i.e. clears content if ``length``==0 or does nothing
@@ -798,8 +794,7 @@ class ACDFuse(LoggingMixIn, Operations):
             self.rp.release(node_id)
             with self.fh_lock:
                 """release the writer if there's no more interest. This allows many file
-                handles to write to a single node provided they do it in order, enabling
-                sequential writes using mmap.
+                handles to write to a single node provided they do it in order.
                 """
                 interest = self.node_to_fh.get(node_id)
                 if interest:
