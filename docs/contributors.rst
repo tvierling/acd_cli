@@ -25,6 +25,8 @@ Thanks to
 
 - `gerph <https://github.com/gerph>`_ for making file searches faster, particularly on large repositories
 
+- `bgemmill <https://github.com/bgemmill>`_ for fuse write-back caching, xattrs, symlinks, and rsync support
+
 Also thanks to
 
 - `fibersnet <https://github.com/fibersnet>`_ for pointing out a possible deadlock in ACDFuse.
