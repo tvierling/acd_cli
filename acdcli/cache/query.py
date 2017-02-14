@@ -128,11 +128,15 @@ class Node(object):
 
     @property
     def created(self):
-        return datetime_from_string(self.cre)
+        if isinstance(self.cre, str):
+            self.cre = datetime_from_string(self.cre)
+        return self.cre
 
     @property
     def modified(self):
-        return datetime_from_string(self.mod)
+        if isinstance(self.mod, str):
+            self.mod = datetime_from_string(self.mod)
+        return self.mod
 
     @property
     def simple_name(self):
@@ -143,11 +147,19 @@ class Node(object):
 
 class QueryMixin(object):
     def get_node(self, id) -> 'Union[Node|None]':
-        with cursor(self._conn) as c:
-            c.execute(NODE_BY_ID_SQL, [id])
-            r = c.fetchone()
-            if r:
-                return Node(r)
+        with self.node_cache_lock:
+            try:
+                return self.node_id_to_node_cache[id]
+            except:
+                pass
+            with cursor(self._conn) as c:
+                c.execute(NODE_BY_ID_SQL, [id])
+                r = c.fetchone()
+                if r:
+                    n = Node(r)
+                    if n.is_available:
+                        self.node_id_to_node_cache[n.id] = n
+                    return n
 
     def get_root_node(self):
         return self.get_node(self.root_id)
@@ -161,30 +173,22 @@ class QueryMixin(object):
                 return Node(r)
 
     def resolve_id(self, path: str, trash=False) -> str:
-        with self.path_to_node_id_cache_lock:
+        with self.node_cache_lock:
             try:
                 return self.path_to_node_id_cache[path]
             except:
                 pass
             n = self._resolve(path, trash)
             if n:
+                self.node_id_to_node_cache[n.id] = n
                 self.path_to_node_id_cache[path] = n.id
                 return n.id
             return None
 
     def resolve(self, path: str, trash=False) -> 'Union[Node|None]':
         """Gets a node from a path"""
-        with self.path_to_node_id_cache_lock:
-            try:
-                node_id = self.path_to_node_id_cache[path]
-                return self.get_node(node_id)
-            except:
-                pass
-            n = self._resolve(path, trash)
-            if n:
-                self.path_to_node_id_cache[path] = n.id
-                return n
-            return None
+        id = self.resolve_id(path=path, trash=trash)
+        return self.get_node(id=id) if id else None
 
     def _resolve(self, path: str, trash=False) -> 'Union[Node|None]':
         segments = list(filter(bool, path.split('/')))
@@ -294,9 +298,11 @@ class QueryMixin(object):
 
         """If the caller provides the folder_path, we can add all the children to the
         path->node_id cache for faster lookup after a directory listing"""
-        if folder_path:
-            with self.path_to_node_id_cache_lock:
-                for c in folders + files:
+        with self.node_cache_lock:
+            for c in folders + files:
+                if c.is_available:
+                    self.node_id_to_node_cache[c.id] = c
+                if folder_path:
                     self.path_to_node_id_cache[folder_path + '/' + c.name] = c.id
 
         return folders, files

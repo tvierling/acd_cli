@@ -69,8 +69,9 @@ class NodeCache(SchemaMixin, QueryMixin, SyncMixin, FormatterMixin):
 
         self._conn.create_function('REGEXP', _regex_match.__code__.co_argcount, _regex_match)
 
+        self.node_id_to_node_cache = {}
         self.path_to_node_id_cache = {}
-        self.path_to_node_id_cache_lock = Lock()
+        self.node_cache_lock = Lock()
         """There are a huge number of repeated path lookups,
         so cache results and selectively invalidate."""
 

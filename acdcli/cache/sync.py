@@ -5,6 +5,8 @@ Syncs Amazon Node API objects with SQLite database.
 import logging
 from datetime import datetime
 from itertools import islice
+
+from acdcli.cache.query import Node
 from .cursors import mod_cursor
 import dateutil.parser as iso_date
 
@@ -48,11 +50,11 @@ class SyncMixin(object):
         logger.info('Purged %i node(s).' % len(purged))
 
     def resolve_cache_add(self, path:str, node_id:str):
-        with self.path_to_node_id_cache_lock:
+        with self.node_cache_lock:
             self.path_to_node_id_cache[path] = node_id
 
     def resolve_cache_del(self, path:str):
-        with self.path_to_node_id_cache_lock:
+        with self.node_cache_lock:
             try: del self.path_to_node_id_cache[path]
             except:pass
 
@@ -60,7 +62,7 @@ class SyncMixin(object):
         """Inserts mixed list of files and folders into cache."""
 
         if flush_resolve_cache:
-            with self.path_to_node_id_cache_lock:
+            with self.node_cache_lock:
                 self.path_to_node_id_cache.clear()
 
         files = []
@@ -105,14 +107,32 @@ class SyncMixin(object):
 
         with mod_cursor(self._conn) as c:
             for f in folders:
+                n = Node(dict(id=f['id'],
+                              type="folder",
+                              name=f.get('name'),
+                              description=f.get('description'),
+                              created=iso_date.parse(f['createdDate']),
+                              modified=iso_date.parse(f['modifiedDate']),
+                              updated=datetime.utcnow(),
+                              status=f['status'],
+                              md5=None,
+                              size=0,
+                              ))
+
+                with self.node_cache_lock:
+                    if n.is_available:
+                        self.node_id_to_node_cache[n.id] = n
+                    else:
+                        self.node_id_to_node_cache.clear()
+
                 c.execute(
                     'INSERT OR REPLACE INTO nodes '
                     '(id, type, name, description, created, modified, updated, status) '
-                    'VALUES (?, "folder", ?, ?, ?, ?, ?, ?)',
-                    [f['id'], f.get('name'), f.get('description'),
-                     iso_date.parse(f['createdDate']), iso_date.parse(f['modifiedDate']),
-                     datetime.utcnow(),
-                     f['status']
+                    'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                    [n.id, n.type, n.name, n.description,
+                     n.created, n.modified,
+                     n.updated,
+                     n.status
                      ]
                 )
 
@@ -124,22 +144,42 @@ class SyncMixin(object):
 
         with mod_cursor(self._conn) as c:
             for f in files:
-                c.execute('INSERT OR REPLACE INTO nodes '
-                          '(id, type, name, description, created, modified, updated, status)'
-                          'VALUES (?, "file", ?, ?, ?, ?, ?, ?)',
-                          [f['id'], f.get('name'), f.get('description'),
-                           iso_date.parse(f['createdDate']), iso_date.parse(f['modifiedDate']),
-                           datetime.utcnow(),
-                           f['status']
-                           ]
-                          )
-                c.execute('INSERT OR REPLACE INTO files (id, md5, size) VALUES (?, ?, ?)',
-                          [f['id'],
-                           f.get('contentProperties', {}).get('md5',
-                                                              'd41d8cd98f00b204e9800998ecf8427e'),
-                           f.get('contentProperties', {}).get('size', 0)
-                           ]
-                          )
+                n = Node(dict(id=f['id'],
+                              type="file",
+                              name=f.get('name'),
+                              description=f.get('description'),
+                              created=iso_date.parse(f['createdDate']),
+                              modified=iso_date.parse(f['modifiedDate']),
+                              updated=datetime.utcnow(),
+                              status=f['status'],
+                              md5=f.get('contentProperties', {}).get('md5', 'd41d8cd98f00b204e9800998ecf8427e'),
+                              size=f.get('contentProperties', {}).get('size', 0),
+                              ))
+
+                with self.node_cache_lock:
+                    if n.is_available:
+                        self.node_id_to_node_cache[n.id] = n
+                    else:
+                        try: del self.node_id_to_node_cache[n.id]
+                        except: pass
+
+                c.execute(
+                    'INSERT OR REPLACE INTO nodes '
+                    '(id, type, name, description, created, modified, updated, status) '
+                    'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                    [n.id, n.type, n.name, n.description,
+                     n.created, n.modified,
+                     n.updated,
+                     n.status
+                     ]
+                )
+                c.execute(
+                    'INSERT OR REPLACE INTO files (id, md5, size) VALUES (?, ?, ?)',
+                    [n.id,
+                     n.md5,
+                     n.size
+                     ]
+                )
 
         logger.info('Inserted/updated %d file(s).' % len(files))
 
