@@ -863,14 +863,19 @@ class ACDFuse(LoggingMixIn, Operations):
         node_id = self.fh_to_node[fh]
         self._setxattr(node_id, _XATTR_MODE_OVERRIDE_NAME, stat.S_IFLNK | 0o0777)
         self._setxattr(node_id, _XATTR_SYMLINK_OVERRIDE_NAME, source)
+        self.write(target, source.encode('utf-8'), 0, fh)
         self.release(target, fh)
         return 0
 
     def readlink(self, path):
-        node_id = self.cache.resolve_id(path)
-        if not node_id:
+        node = self.cache.resolve(path)
+        if not node:
             raise FuseOSError(errno.ENOENT)
-        source = self._getxattr(node_id, _XATTR_SYMLINK_OVERRIDE_NAME)
+        source = self._getxattr(node.id, _XATTR_SYMLINK_OVERRIDE_NAME)
+        if source is None:
+            size = self.wp.length(node.id, None)
+            if size is None: size = node.size
+            source = self.read(path, size, 0).decode('utf-8')
         return source
 
 
