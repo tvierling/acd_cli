@@ -53,6 +53,9 @@ NODE_BY_ID_SQL = """SELECT n.*, f.* FROM nodes n LEFT OUTER JOIN files f ON n.id
 
 PROPERTY_BY_ID_SQL = """SELECT * FROM properties WHERE id=? AND owner=? AND key=?"""
 
+CONTENT_BY_ID_SQL = """SELECT * FROM content WHERE id=? AND version=?"""
+CONTENT_ACCESSED_SQL = """UPDATE content SET accessed=? WHERE id=?"""
+
 USAGE_SQL = 'SELECT SUM(size) FROM files'
 
 FIND_BY_NAME_SQL = """SELECT n.*, f.* FROM nodes n
@@ -100,6 +103,10 @@ class Node(object):
             self.size = row['size']
         except IndexError:
             self.size = 0
+        try:
+            self.version = row['version']
+        except IndexError:
+            self.version = 0
 
     def __lt__(self, other):
         return self.name < other.name
@@ -368,3 +375,12 @@ class QueryMixin(object):
             if r:
                 return r['value']
         return None
+
+    def get_content(self, node_id:str, version:int) -> 'Union[bytes|None]':
+        if version == 0: return None
+        with cursor(self._conn) as c:
+            c.execute(CONTENT_ACCESSED_SQL, [datetime.utcnow(), node_id])
+            c.execute(CONTENT_BY_ID_SQL, [node_id, version])
+            r = c.fetchone()
+            if r:
+                return r['value']

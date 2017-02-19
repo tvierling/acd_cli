@@ -56,9 +56,10 @@ _XATTR_MODE_OVERRIDE_NAME = 'fuse.mode'
 _XATTR_UID_OVERRIDE_NAME = 'fuse.uid'
 _XATTR_GID_OVERRIDE_NAME = 'fuse.gid'
 _XATTR_SYMLINK_OVERRIDE_NAME = 'fuse.symlink'
+_FS_BLOCK_SIZE = 4096  # for stat and statfs calls. This could be anything as long as it's consistent
 
 _def_conf = configparser.ConfigParser()
-_def_conf['read'] = dict(open_chunk_limit=10, timeout=5)
+_def_conf['read'] = dict(open_chunk_limit=10, timeout=5, cache_small_file_size=1024)
 _def_conf['write'] = dict(buffer_size=int(1e9), timeout=30)
 
 
@@ -378,8 +379,8 @@ class ACDFuse(LoggingMixIn, Operations):
         """sets the default gid"""
         self.umask = kwargs['umask']
         """sets the default umask"""
-        self.blksize = self.acd_client._conf.getint('transfer', 'fs_chunk_size')
-        """size of the filesystem blocks for stat queries"""
+        self.cache_small_file_size = conf.getint('read', 'cache_small_file_size')
+        """size of files under which we cache the contents automatically"""
 
         self.destroyed = autosync.keywords['stop']
         """:type: multiprocessing.Event"""
@@ -456,8 +457,8 @@ class ACDFuse(LoggingMixIn, Operations):
             return dict(st_mode=mode,
                         st_nlink=self.cache.num_parents(node.id) if self.nlinks else 1,
                         st_size=size,
-                        st_blksize=self.blksize,
-                        st_blocks=(size + 511) // 512,
+                        st_blksize=_FS_BLOCK_SIZE,
+                        st_blocks=(size + 511) // 512,  # this field always expects a 512 block size
                         **attrs)
 
     def listxattr(self, path):
@@ -505,7 +506,7 @@ class ACDFuse(LoggingMixIn, Operations):
         with self.xattr_cache_lock:
             if name in self.xattr_cache[node_id]:
                 del self.xattr_cache[node_id][name]
-                self.properties_dirty.add(node_id)
+                self.xattr_dirty.add(node_id)
 
     def setxattr(self, path, name, value, options, position=0):
         node_id = self.cache.resolve_id(path)
@@ -570,17 +571,29 @@ class ACDFuse(LoggingMixIn, Operations):
         if ret is not None:
             return ret
 
+        """Next, check our local cache"""
+        content = self.cache.get_content(node.id, node.version)
+        if content is not None:
+            return content[offset:offset+length]
+
+        """For small files, read and cache the whole file"""
+        if node.size <= self.cache_small_file_size:
+            content = self.acd_client.download_chunk(node.id, 0, node.size)
+            self.cache.insert_content(node.id, node.version, content)
+            return content[offset:offset+length]
+
+        """For all other files, stream from amazon"""
         return self.rp.get(node.id, offset, length, node.size)
 
     def statfs(self, path) -> dict:
-        """Gets some filesystem statistics as specified in :manpage:`stat(2)`."""
+        """Gets some filesystem statistics as specified in :manpage:`statfs(2)`."""
 
-        return dict(f_bsize=self.blksize,
-                    f_frsize=self.blksize,
-                    f_blocks=self.total // self.blksize,  # total no of blocks
-                    f_bfree=self.free // self.blksize,  # free blocks
-                    f_bavail=self.free // self.blksize,
-                    f_namemax=256
+        return dict(f_bsize=_FS_BLOCK_SIZE,
+                    f_frsize=_FS_BLOCK_SIZE,
+                    f_blocks=self.total // _FS_BLOCK_SIZE,  # total no of blocks
+                    f_bfree=self.free // _FS_BLOCK_SIZE,  # free blocks
+                    f_bavail=self.free // _FS_BLOCK_SIZE,
+                    f_namemax=256  # from amazon's spec
                     )
 
     def mkdir(self, path, mode):
@@ -619,7 +632,7 @@ class ACDFuse(LoggingMixIn, Operations):
         except RequestError as e:
             FuseOSError.convert(e)
         else:
-            self.cache.insert_node(r, flush_resolve_cache=node.is_folder)
+            self.cache.insert_node(r, flush_resolve_cache=False)
             self.cache.resolve_cache_del(path)
 
     def rmdir(self, path):
@@ -859,11 +872,12 @@ class ACDFuse(LoggingMixIn, Operations):
         return 0
 
     def symlink(self, target, source):
+        source_bytes = source.encode('utf-8')
         fh = self.create(target, None)
         node_id = self.fh_to_node[fh]
         self._setxattr(node_id, _XATTR_MODE_OVERRIDE_NAME, stat.S_IFLNK | 0o0777)
-        self._setxattr(node_id, _XATTR_SYMLINK_OVERRIDE_NAME, source)
-        self.write(target, source.encode('utf-8'), 0, fh)
+        # self._setxattr(node_id, _XATTR_SYMLINK_OVERRIDE_NAME, source)
+        self.write(target, source_bytes, 0, fh)
         self.release(target, fh)
         return 0
 
@@ -871,11 +885,32 @@ class ACDFuse(LoggingMixIn, Operations):
         node = self.cache.resolve(path)
         if not node:
             raise FuseOSError(errno.ENOENT)
-        source = self._getxattr(node.id, _XATTR_SYMLINK_OVERRIDE_NAME)
+
+        source = None
+
+        # amazon reduced property size (all our xattr space) to 500 characters or less,
+        # so we're moving symlinks to file bodies.
+        try: source = self._getxattr(node.id, _XATTR_SYMLINK_OVERRIDE_NAME)
+        except: pass
+        if source is not None:
+            logger.debug("readlink: upgrading node: %s path: %s" % (node.id, path))
+            source_bytes = source.encode('utf-8')
+            fh = self.open(path, 0)
+            self.write(path, source_bytes, 0, fh)
+            self.release(path, fh)
+            self._removexattr(node.id, _XATTR_SYMLINK_OVERRIDE_NAME)
+
+        if source is None:
+            source_bytes = self.cache.get_content(node.id, node.version)
+            if source_bytes is not None:
+                source = source_bytes.decode('utf-8')
+
         if source is None:
             size = self.wp.length(node.id, None)
             if size is None: size = node.size
-            source = self.read(path, size, 0).decode('utf-8')
+            source_bytes = self.read(path, size, 0)
+            source = source_bytes.decode('utf-8')
+            self.cache.insert_content(node.id, node.version, source_bytes)
         return source
 
 

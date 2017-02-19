@@ -42,6 +42,7 @@ class SyncMixin(object):
             with mod_cursor(self._conn) as c:
                 c.execute('DELETE FROM nodes WHERE id IN %s' % placeholders(slice_), slice_)
                 c.execute('DELETE FROM files WHERE id IN %s' % placeholders(slice_), slice_)
+                c.execute('DELETE FROM content WHERE id IN %s' % placeholders(slice_), slice_)
                 c.execute('DELETE FROM parentage WHERE parent IN %s' % placeholders(slice_), slice_)
                 c.execute('DELETE FROM parentage WHERE child IN %s' % placeholders(slice_), slice_)
                 c.execute('DELETE FROM properties WHERE id IN %s' % placeholders(slice_), slice_)
@@ -117,13 +118,15 @@ class SyncMixin(object):
                               status=f['status'],
                               md5=None,
                               size=0,
+                              version=0,
                               ))
 
                 with self.node_cache_lock:
                     if n.is_available:
                         self.node_id_to_node_cache[n.id] = n
                     else:
-                        self.node_id_to_node_cache.clear()
+                        try: del self.node_id_to_node_cache[n.id]
+                        except: pass
 
                 c.execute(
                     'INSERT OR REPLACE INTO nodes '
@@ -154,6 +157,7 @@ class SyncMixin(object):
                               status=f['status'],
                               md5=f.get('contentProperties', {}).get('md5', 'd41d8cd98f00b204e9800998ecf8427e'),
                               size=f.get('contentProperties', {}).get('size', 0),
+                              version=f.get('contentProperties', {}).get('version', 0),
                               ))
 
                 with self.node_cache_lock:
@@ -162,6 +166,9 @@ class SyncMixin(object):
                     else:
                         try: del self.node_id_to_node_cache[n.id]
                         except: pass
+
+                if not n.is_available:
+                    self.remove_content(n.id)
 
                 c.execute(
                     'INSERT OR REPLACE INTO nodes '
@@ -174,10 +181,11 @@ class SyncMixin(object):
                      ]
                 )
                 c.execute(
-                    'INSERT OR REPLACE INTO files (id, md5, size) VALUES (?, ?, ?)',
+                    'INSERT OR REPLACE INTO files (id, md5, size, version) VALUES (?, ?, ?, ?)',
                     [n.id,
                      n.md5,
-                     n.size
+                     n.size,
+                     n.version,
                      ]
                 )
 
@@ -225,4 +233,18 @@ class SyncMixin(object):
                       '(id, owner, key, value) '
                       'VALUES (?, ?, ?, ?)',
                       [node_id, owner_id, key, value]
+                      )
+
+    def insert_content(self, node_id:str, version:int, value:bytes):
+        with mod_cursor(self._conn) as c:
+            c.execute('INSERT OR REPLACE INTO content '
+                      '(id, value, size, version, accessed) '
+                      'VALUES (?, ?, ?, ?, ?)',
+                      [node_id, value, len(value), version, datetime.utcnow()]
+                      )
+
+    def remove_content(self, node_id:str):
+        with mod_cursor(self._conn) as c:
+            c.execute('DELETE FROM content WHERE id=?',
+                      [node_id]
                       )

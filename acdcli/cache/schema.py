@@ -48,6 +48,7 @@ _CREATION_SCRIPT = """
         id VARCHAR(50) NOT NULL,
         md5 VARCHAR(32),
         size BIGINT,
+        version BIGINT,
         PRIMARY KEY (id),
         UNIQUE (id),
         FOREIGN KEY(id) REFERENCES nodes (id)
@@ -61,9 +62,22 @@ _CREATION_SCRIPT = """
         FOREIGN KEY(child) REFERENCES nodes (id)
     );
 
+    CREATE TABLE content (
+        id VARCHAR(50) NOT NULL,
+        value BLOB,
+        size BIGINT,
+        version BIGINT,
+        accessed DATETIME,
+        PRIMARY KEY (id),
+        UNIQUE (id),
+        FOREIGN KEY(id) REFERENCES nodes (id)
+    );
+
+    CREATE INDEX ix_content_size ON content(size);
+    CREATE INDEX ix_content_accessed ON content(accessed);
     CREATE INDEX ix_parentage_child ON parentage(child);
     CREATE INDEX ix_nodes_names ON nodes(name);
-    PRAGMA user_version = 3;
+    PRAGMA user_version = 4;
     """
 
 _GEN_DROP_TABLES_SQL = \
@@ -91,6 +105,12 @@ def _1_to_2(conn):
 
 def _2_to_3(conn):
     conn.executescript(
+        # For people upgrading from the main branch to PR374, this line should make the db queries work.
+        # The user would also need to old-sync if they had multiple databases *and* were all ready using
+        # properties in some of them. It's not clear how to do that from here aside from dropping all data.
+        'CREATE TABLE IF NOT EXISTS properties (id VARCHAR(50) NOT NULL, owner TEXT NOT NULL, '
+        'key TEXT NOT NULL, value TEXT, PRIMARY KEY (id), FOREIGN KEY(id) REFERENCES nodes (id));'
+
         'CREATE INDEX IF NOT EXISTS ix_parentage_child ON parentage(child);'
         # Having changed the schema, the queries can be optimised differently.
         # In order to be aware of that, re-analyze the type of data and indexes,
@@ -100,12 +120,31 @@ def _2_to_3(conn):
     )
     conn.commit()
 
-_migrations = [_0_to_1, _1_to_2, _2_to_3]
+
+def _3_to_4(conn):
+    conn.executescript(
+        'ALTER TABLE files ADD version BIGINT;'
+
+        'DROP TABLE IF EXISTS content;'
+        'CREATE TABLE content (id VARCHAR(50) NOT NULL, value BLOB, size BIGINT, version BIGINT, accessed DATETIME,'
+        'PRIMARY KEY (id), UNIQUE (id), FOREIGN KEY(id) REFERENCES nodes (id)); '
+
+        'CREATE INDEX IF NOT EXISTS ix_content_size ON content(size);'
+        'CREATE INDEX IF NOT EXISTS ix_content_accessed ON content(accessed);'
+        # Having changed the schema, the queries can be optimised differently.
+        # In order to be aware of that, re-analyze the type of data and indexes,
+        # allowing SQLite3 to make better decisions.
+        'ANALYZE;'
+        'PRAGMA user_version = 4;'
+    )
+    conn.commit()
+
+_migrations = [_0_to_1, _1_to_2, _2_to_3, _3_to_4]
 """list of all migrations from index -> index+1"""
 
 
 class SchemaMixin(object):
-    _DB_SCHEMA_VER = 3
+    _DB_SCHEMA_VER = 4
 
     def init(self):
         try:

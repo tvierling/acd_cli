@@ -416,7 +416,7 @@ class ContentMixin(object):
                 raise RequestError(r.status_code, r.text)
             return r
 
-    def download_chunk(self, node_id: str, offset: int, length: int, **kwargs) -> bytearray:
+    def download_chunk(self, node_id: str, offset: int, length: int, **kwargs) -> bytes:
         """Load a file chunk into memory.
 
         :param length: the length of the download chunk"""
@@ -432,7 +432,7 @@ class ContentMixin(object):
                     buffer.extend(chunk)
         finally:
             r.close()
-        return buffer
+        return bytes(buffer)
 
     def download_thumbnail(self, node_id: str, file_name: str, max_dim=128):
         """Download a movie's or picture's thumbnail into a file.
