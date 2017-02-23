@@ -294,6 +294,9 @@ class WriteProxy(object):
             self._write_and_sync(b, node_id)
             del self.buffers[node_id]
 
+    def remove(self, node_id, fh):
+        try: del self.buffers[node_id]
+        except: pass
 
 class LoggingMixIn(object):
     """Modified fusepy LoggingMixIn that does not log read or written bytes
@@ -803,22 +806,32 @@ class ACDFuse(LoggingMixIn, Operations):
             node_id = self.fh_to_node[fh]
         else:
             node_id = self.cache.resolve_id(path)
-        if node_id:
-            self.rp.release(node_id)
-            with self.fh_lock:
-                """release the writer if there's no more interest. This allows many file
-                handles to write to a single node provided they do it in order.
-                """
-                interest = self.node_to_fh.get(node_id)
-                if interest:
-                    interest.discard(fh)
-                if not interest:
-                    self.wp.release(node_id, fh)
-                    self._xattr_write_and_sync()
-                    del self.node_to_fh[node_id]
-                del self.fh_to_node[fh]
-        else:
+        if not node_id:
             raise FuseOSError(errno.ENOENT)
+
+        flush = False
+        with self.fh_lock:
+            """release the writer if there's no more interest. This allows many file
+            handles to write to a single node provided they do it in order.
+            """
+            interest = self.node_to_fh.get(node_id)
+            if interest:
+                interest.discard(fh)
+            if not interest:
+                flush = True
+                del self.node_to_fh[node_id]
+            del self.fh_to_node[fh]
+
+        if flush:
+            self.rp.release(node_id)
+            self.wp.flush(node_id, None)
+            self._xattr_write_and_sync()
+            """make sure no additional file handles showed interest before we get rid of the write buffer"""
+            with self.fh_lock:
+                interest = self.node_to_fh.get(node_id)
+                if not interest:
+                    self.wp.remove(node_id, None)
+        return 0
 
     def utimens(self, path, times=None):
         """Should set node atime and mtime to values as passed in ``times``
