@@ -58,7 +58,7 @@ _CREATION_SCRIPT = """
         parent VARCHAR(50) NOT NULL,
         child VARCHAR(50) NOT NULL,
         PRIMARY KEY (parent, child),
-        FOREIGN KEY(parent) REFERENCES folders (id),
+        FOREIGN KEY(parent) REFERENCES nodes (id),
         FOREIGN KEY(child) REFERENCES nodes (id)
     );
 
