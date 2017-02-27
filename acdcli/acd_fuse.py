@@ -616,10 +616,7 @@ class ACDFuse(LoggingMixIn, Operations):
             self.cache.insert_node(r, flush_resolve_cache=False)
             node_id = r['id']
             self.cache.resolve_cache_add(path, node_id)
-
-            # TODO: Set properties in the node creation call. Doing it here means we call amazon twice;
-            # and if we're rsyncing chmod does it a third time.
-            if False and mode is not None:
+            if mode is not None:
                 self._setxattr(node_id, _XATTR_MODE_OVERRIDE_NAME, stat.S_IFDIR | (stat.S_IMODE(mode)))
                 self._xattr_write_and_sync()
 
@@ -679,9 +676,7 @@ class ACDFuse(LoggingMixIn, Operations):
                 #     self._rename(prior_node_id, prior_node_cache.name)
             FuseOSError.convert(e)
 
-        # TODO: Set properties in the node creation call. Doing it here means we call amazon twice;
-        # and if we're rsyncing chmod does it a third time.
-        if False and mode is not None:
+        if mode is not None:
             self._setxattr(node_id, _XATTR_MODE_OVERRIDE_NAME, stat.S_IFREG | (stat.S_IMODE(mode)))
 
         with self.fh_lock:
