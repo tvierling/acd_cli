@@ -236,9 +236,6 @@ class WriteProxy(object):
         def write(self, offset, bytes_: bytes):
             with self.lock:
                 self.dirty = True
-                if offset > self.len:
-                    logger.error('Wrong offset for writing to buffer; writing gap detected')
-                    raise FuseOSError(errno.ESPIPE)
                 self.f.seek(offset)
                 ret = self.f.write(bytes_)
                 self.f.seek(0, os.SEEK_END)
