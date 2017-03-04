@@ -768,30 +768,40 @@ class ACDFuse(LoggingMixIn, Operations):
         return len(data)
 
     def truncate(self, path, length, fh=None):
-        """Pseudo-truncates a file, i.e. clears content if ``length``==0 or does nothing
-        if ``length`` is positive.
+        """Pseudo-truncates a file, i.e. clears content if ``length``==0 or grows
+        newly created nodes if ``length`` is greater than the write-back cache size.
 
         :raises FuseOSError: if pseudo-truncation to length is not supported"""
 
         if fh:
             node_id = self.fh_to_node[fh]
+            node = self.cache.get_node(node_id)
         else:
-            node_id = self.cache.resolve_id(path)
-        if not node_id:
+            node = self.cache.resolve(path, trash=False)
+        if not node:
             raise FuseOSError(errno.ENOENT)
 
-        if length == 0:
+        # cut file size to 0
+        if length == 0 and node.size:
             try:
-                r = self.acd_client.clear_file(node_id)
+                r = self.acd_client.clear_file(node.id)
             except RequestError as e:
                 raise FuseOSError.convert(e)
             else:
                 self.cache.insert_node(r, flush_resolve_cache=False)
+                return 0
 
-        """No good way to deal with positive lengths at the moment; since we can only do
-        something about it in the middle of writing, this means the only use case we can
-        capture is when a program over-writes and then truncates back."""
-        return 0
+        # grow newly created files
+        if node.size == 0 and length:
+            size = self.wp.length(node.id, fh)
+            if size is None: size = node.size
+            if length > size:
+                # amazon doesn't understand sparse files, so we send zeros
+                self.wp.write(node.id, fh, size, bytes(length - size))
+                return 0
+
+        # throw until there's an api for modifying existing files' length
+        raise FuseOSError(errno.ENOSYS)
 
     def release(self, path, fh):
         """Releases an open ``path``."""
