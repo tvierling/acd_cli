@@ -767,6 +767,15 @@ class ACDFuse(LoggingMixIn, Operations):
         self.wp.write(node_id, fh, offset, data)
         return len(data)
 
+    def flush(self, path, fh):
+        if fh:
+            node_id = self.fh_to_node[fh]
+        else:
+            node_id = self.cache.resolve_id(path)
+        if not node_id:
+            raise FuseOSError(errno.ENOENT)
+        self.wp.flush(node_id, fh)
+
     def truncate(self, path, length, fh=None):
         """Pseudo-truncates a file, i.e. clears content if ``length``==0 or grows
         newly created nodes if ``length`` is greater than the write-back cache size.
