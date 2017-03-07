@@ -11,8 +11,8 @@ import tempfile
 
 from collections import deque, defaultdict
 from multiprocessing import Process
-from threading import Thread, Lock
-from time import time
+from threading import Lock, Thread
+from time import time, sleep
 
 import ctypes.util
 import binascii
@@ -20,6 +20,10 @@ import binascii
 import requests
 
 from acdcli.cache.db import CacheConsts
+
+from fuse import FUSE, FuseOSError as FuseError, Operations
+from acdcli.api.common import RequestError
+from acdcli.utils.conf import get_conf
 
 ctypes.util.__find_library = ctypes.util.find_library
 
@@ -32,12 +36,6 @@ def find_library(*args):
     return ctypes.util.__find_library(*args)
 
 ctypes.util.find_library = find_library
-
-from fuse import FUSE, FuseOSError as FuseError, Operations
-from acdcli.api.common import RequestError
-from acdcli.utils.conf import get_conf
-from acdcli.utils.time import *
-
 logger = logging.getLogger(__name__)
 
 try:
@@ -56,7 +54,8 @@ _XATTR_MODE_OVERRIDE_NAME = 'fuse.mode'
 _XATTR_UID_OVERRIDE_NAME = 'fuse.uid'
 _XATTR_GID_OVERRIDE_NAME = 'fuse.gid'
 _XATTR_SYMLINK_OVERRIDE_NAME = 'fuse.symlink'
-_FS_BLOCK_SIZE = 4096  # for stat and statfs calls. This could be anything as long as it's consistent
+_XATTR_DELAY = 2  # seconds to wait for additional xattr changes before flushing to amazon
+_FS_BLOCK_SIZE = 4096  # for stat and statfs calls. Needs to be consistent and may affect read sizes from fuse
 
 _def_conf = configparser.ConfigParser()
 _def_conf['read'] = dict(open_chunk_limit=10, timeout=5, cache_small_file_size=1024)
@@ -391,7 +390,6 @@ class ACDFuse(LoggingMixIn, Operations):
         p.start()
 
     def destroy(self, path):
-        self._xattr_write_and_sync()
         self.destroyed.set()
 
     def readdir(self, path, fh) -> 'List[str]':
@@ -535,9 +533,18 @@ class ACDFuse(LoggingMixIn, Operations):
                 try: self.xattr_cache[node_id] = json.loads(xattrs_str)
                 except: self.xattr_cache[node_id] = {}
 
-    def _xattr_write_and_sync(self):
+    def _xattr_flush(self, node_id):
+        # collect all xattr changes while any fh's are open so we talk to amazon less
+        with self.fh_lock:
+            if self.node_to_fh.get(node_id):
+                return
+        Thread(target=self._xattr_write_and_sync, args=(node_id,)).start()
+
+    def _xattr_write_and_sync(self, node_id):
+        # try to collect many xattr changes at once so we talk to amazon less
+        sleep(_XATTR_DELAY)
         with self.xattr_cache_lock:
-            for node_id in self.xattr_dirty:
+            if node_id in self.xattr_dirty:
                 try:
                     xattrs_str = json.dumps(self.xattr_cache[node_id])
                     self.acd_client.add_property(node_id, self.acd_client_owner, _XATTR_PROPERTY_NAME,
@@ -546,7 +553,7 @@ class ACDFuse(LoggingMixIn, Operations):
                     logger.error('Error writing node xattrs "%s". %s' % (node_id, str(e)))
                 else:
                     self.cache.insert_property(node_id, self.acd_client_owner, _XATTR_PROPERTY_NAME, xattrs_str)
-            self.xattr_dirty.clear()
+                self.xattr_dirty.discard(node_id)
 
     def read(self, path, length, offset, fh=None) -> bytes:
         """Read ```length`` bytes from ``path`` at ``offset``."""
@@ -555,7 +562,7 @@ class ACDFuse(LoggingMixIn, Operations):
             node_id = self.fh_to_node[fh]
             node = self.cache.get_node(node_id)
         else:
-            node = self.cache.resolve(path, trash=False)
+            node = self.cache.resolve(path)
         if not node:
             raise FuseOSError(errno.ENOENT)
 
@@ -617,7 +624,7 @@ class ACDFuse(LoggingMixIn, Operations):
             self.cache.resolve_cache_add(path, node_id)
             if mode is not None:
                 self._setxattr(node_id, _XATTR_MODE_OVERRIDE_NAME, stat.S_IFDIR | (stat.S_IMODE(mode)))
-                self._xattr_write_and_sync()
+                self._xattr_flush(node_id)
 
     def _trash(self, path):
         logger.debug('trash %s' % path)
@@ -645,9 +652,11 @@ class ACDFuse(LoggingMixIn, Operations):
         """Moves a file into ACD trash."""
         self._trash(path)
 
-    def create(self, path, mode) -> int:
-        """Creates an empty file at ``path``.
+    def create(self, path, mode, **kwargs) -> int:
+        """Creates an empty file at ``path`` with access ``mode``.
 
+        :param mode:
+        :param path:
         :returns int: file handle"""
 
         name = os.path.basename(path)
@@ -742,6 +751,7 @@ class ACDFuse(LoggingMixIn, Operations):
     def open(self, path, flags) -> int:
         """Opens a file.
 
+        :param path:
         :param flags: flags defined as in :manpage:`open(2)`
         :returns: file handle"""
 
@@ -767,8 +777,10 @@ class ACDFuse(LoggingMixIn, Operations):
 
         if fh:
             node_id = self.fh_to_node[fh]
-        # This is not resolving by path on purpose, since flushing to
-        # amazon is done on closing all interested file handles.
+        else:
+            # This is not resolving by path on purpose, since flushing to
+            # amazon is done on closing all interested file handles.
+            node_id = None
         if not node_id:
             raise FuseOSError(errno.ENOENT)
 
@@ -794,7 +806,7 @@ class ACDFuse(LoggingMixIn, Operations):
             node_id = self.fh_to_node[fh]
             node = self.cache.get_node(node_id)
         else:
-            node = self.cache.resolve(path, trash=False)
+            node = self.cache.resolve(path)
         if not node:
             raise FuseOSError(errno.ENOENT)
 
@@ -834,6 +846,7 @@ class ACDFuse(LoggingMixIn, Operations):
         if not node_id:
             raise FuseOSError(errno.ENOENT)
 
+        last_handle = False
         with self.fh_lock:
             """release the writer if there's no more interest. This allows many file
             handles to write to a single node provided they do it in order.
@@ -842,11 +855,15 @@ class ACDFuse(LoggingMixIn, Operations):
             if interest:
                 interest.discard(fh)
             if not interest:
-                self.rp.release(node_id)
-                self.wp.release(node_id, None)
-                self._xattr_write_and_sync()
+                last_handle = True
                 del self.node_to_fh[node_id]
             del self.fh_to_node[fh]
+
+        if last_handle:
+            self.rp.release(node_id)
+            self.wp.release(node_id, None)
+            self._xattr_flush(node_id)
+
         return 0
 
     def utimens(self, path, times=None):
@@ -854,6 +871,7 @@ class ACDFuse(LoggingMixIn, Operations):
         or current time (see :manpage:`utimensat(2)`).
         Note that this is only implemented for modified time.
 
+        :param path:
         :param times: [atime, mtime]"""
 
         node_id = self.cache.resolve_id(path)
@@ -869,7 +887,7 @@ class ACDFuse(LoggingMixIn, Operations):
 
         try:
             self._setxattr(node_id, _XATTR_MTIME_OVERRIDE_NAME, mtime)
-            self._xattr_write_and_sync()
+            self._xattr_flush(node_id)
         except:
             raise FuseOSError(errno.ENOTSUP)
 
@@ -885,7 +903,7 @@ class ACDFuse(LoggingMixIn, Operations):
         mode_perms = stat.S_IMODE(mode)
         mode_type = stat.S_IFMT(self._getattr(node)['st_mode'])
         self._setxattr(node.id, _XATTR_MODE_OVERRIDE_NAME, mode_type | mode_perms)
-        self._xattr_write_and_sync()
+        self._xattr_flush(node.id)
         return 0
 
     def chown(self, path, uid, gid):
@@ -897,7 +915,7 @@ class ACDFuse(LoggingMixIn, Operations):
     def _chown(self, node_id, uid, gid):
         if uid != -1: self._setxattr(node_id, _XATTR_UID_OVERRIDE_NAME, uid)
         if gid != -1: self._setxattr(node_id, _XATTR_GID_OVERRIDE_NAME, gid)
-        self._xattr_write_and_sync()
+        self._xattr_flush(node_id)
         return 0
 
     def symlink(self, target, source):
@@ -946,6 +964,7 @@ class ACDFuse(LoggingMixIn, Operations):
 def mount(path: str, args: dict, **kwargs) -> 'Union[int, None]':
     """Fusermounts Amazon Cloud Drive to specified mountpoint.
 
+    :param path:
     :raises: RuntimeError
     :param args: args to pass on to ACDFuse init
     :param kwargs: fuse mount options as described in :manpage:`fuse(8)`"""
