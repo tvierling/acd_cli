@@ -291,6 +291,11 @@ class WriteProxy(object):
             self._write_and_sync(b, node_id)
             del self.buffers[node_id]
 
+    def remove(self, node_id, fh):
+        b = self.buffers.get(node_id)
+        if b:
+            del self.buffers[node_id]
+
 
 class LoggingMixIn(object):
     """Modified fusepy LoggingMixIn that does not log read or written bytes
@@ -746,6 +751,9 @@ class ACDFuse(LoggingMixIn, Operations):
         node_id = self.cache.resolve_id(path, False)
         if not node_id:
             raise FuseOSError(errno.ENOENT)
+        return self._open(node_id)
+
+    def _open(self, node_id):
         with self.fh_lock:
             self.fh += 1
             self.fh_to_node[self.fh] = node_id
@@ -791,14 +799,16 @@ class ACDFuse(LoggingMixIn, Operations):
             raise FuseOSError(errno.ENOENT)
 
         # cut file size to 0
-        if length == 0 and node.size:
-            try:
-                r = self.acd_client.clear_file(node.id)
-            except RequestError as e:
-                raise FuseOSError.convert(e)
-            else:
-                self.cache.insert_node(r, flush_resolve_cache=False)
-                return 0
+        if length == 0:
+            if node.size:
+                try:
+                    r = self.acd_client.clear_file(node.id)
+                except RequestError as e:
+                    raise FuseOSError.convert(e)
+                else:
+                    self.cache.insert_node(r, flush_resolve_cache=False)
+            self.wp.remove(node.id, None)
+            return 0
 
         # grow newly created files
         if node.size == 0 and length:
@@ -806,7 +816,9 @@ class ACDFuse(LoggingMixIn, Operations):
             if size is None: size = node.size
             if length > size:
                 # amazon doesn't understand sparse files, so we send zeros
-                self.wp.write(node.id, fh, size, bytes(length - size))
+                internal_fh = self._open(node.id)
+                self.wp.write(node.id, fh, length-1, bytes(1))
+                self.release(path, internal_fh)
                 return 0
 
         # throw until there's an api for modifying existing files' length
