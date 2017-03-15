@@ -2,6 +2,7 @@
 
 import configparser
 import errno
+import io
 import json
 import logging
 import os
@@ -55,7 +56,7 @@ _XATTR_UID_OVERRIDE_NAME = 'fuse.uid'
 _XATTR_GID_OVERRIDE_NAME = 'fuse.gid'
 _XATTR_SYMLINK_OVERRIDE_NAME = 'fuse.symlink'
 _XATTR_DELAY = 2  # seconds to wait for additional xattr changes before flushing to amazon
-_FS_BLOCK_SIZE = 4096  # for stat and statfs calls. Needs to be consistent and may affect read sizes from fuse
+_FS_BLOCK_SIZE = io.DEFAULT_BUFFER_SIZE  # for stat and statfs calls. Needs to be consistent and may affect read sizes from fuse
 
 _def_conf = configparser.ConfigParser()
 _def_conf['read'] = dict(open_chunk_limit=10, timeout=5, cache_small_file_size=1024)
@@ -450,7 +451,7 @@ class ACDFuse(LoggingMixIn, Operations):
                         **attrs)
         elif node.is_file:
             # symlink
-            if mode and stat.S_ISLNK(stat.S_IFMT(mode)): mode = stat.S_IFLNK | 0o0777
+            if mode and stat.S_ISLNK(mode): mode = stat.S_IFLNK | 0o0777
             # file
             else: mode = stat.S_IFREG | (stat.S_IMODE(mode) if mode else 0o0666 & ~self.umask)
 
