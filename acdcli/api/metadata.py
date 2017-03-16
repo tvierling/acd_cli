@@ -53,7 +53,7 @@ class MetadataMixin(object):
         if file:
             tmp = open(file, 'w+b')
         else:
-            tmp = tempfile.TemporaryFile('w+b')
+            tmp = tempfile.SpooledTemporaryFile(max_size=1e9, mode='w+b')
         try:
             for line in r.iter_lines(chunk_size=10 * 1024 ** 2, decode_unicode=False):
                 if line:
