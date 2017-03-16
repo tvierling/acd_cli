@@ -1,4 +1,5 @@
 import logging
+import os
 from datetime import datetime
 from .cursors import cursor
 
@@ -23,6 +24,12 @@ CHILDREN_SQL = """SELECT n.*, f.* FROM nodes n
                   JOIN parentage p ON n.id = p.child
                   LEFT OUTER JOIN files f ON n.id = f.id
                   WHERE p.parent = (?)
+                  ORDER BY n.name"""
+
+PARENTS_SQL = """SELECT n.*, f.* FROM nodes n
+                  JOIN parentage p ON n.id = p.parent
+                  LEFT OUTER JOIN files f ON n.id = f.id
+                  WHERE p.child = (?)
                   ORDER BY n.name"""
 
 CHILDRENS_NAMES_SQL = """SELECT n.name FROM nodes n
@@ -159,14 +166,15 @@ class QueryMixin(object):
                 return self.node_id_to_node_cache[id]
             except:
                 pass
-            with cursor(self._conn) as c:
-                c.execute(NODE_BY_ID_SQL, [id])
-                r = c.fetchone()
-                if r:
-                    n = Node(r)
-                    if n.is_available:
+        with cursor(self._conn) as c:
+            c.execute(NODE_BY_ID_SQL, [id])
+            r = c.fetchone()
+            if r:
+                n = Node(r)
+                if n.is_available:
+                    with self.node_cache_lock:
                         self.node_id_to_node_cache[n.id] = n
-                    return n
+                return n
 
     def get_root_node(self):
         return self.get_node(self.root_id)
@@ -179,58 +187,49 @@ class QueryMixin(object):
             if r:
                 return Node(r)
 
-    def resolve_id(self, path: str, trash=False) -> str:
-        with self.node_cache_lock:
-            try:
-                return self.path_to_node_id_cache[path]
-            except:
-                pass
-            n = self._resolve(path, trash)
-            if n:
-                self.node_id_to_node_cache[n.id] = n
-                self.path_to_node_id_cache[path] = n.id
-                return n.id
-            return None
+    def resolve_id(self, path: str, trash=False) -> 'Union[str|None]':
+        n = self.resolve(path, trash)
+        if n:
+            return n.id
 
     def resolve(self, path: str, trash=False) -> 'Union[Node|None]':
-        """Gets a node from a path"""
-        id = self.resolve_id(path=path, trash=trash)
-        return self.get_node(id=id) if id else None
+        with self.node_cache_lock:
+            try:
+                return self.get_node(self.path_to_node_id_cache[path])
+            except:
+                pass
 
-    def _resolve(self, path: str, trash=False) -> 'Union[Node|None]':
-        segments = list(filter(bool, path.split('/')))
-        if not segments:
-            if not self.root_id:
+        parent_path, name = os.path.split(path)
+        if not name:
+            r = self.get_root_node()
+            with self.node_cache_lock:
+                self.node_id_to_node_cache[r.id] = r
+                self.path_to_node_id_cache[path] = r.id
+            return r
+
+        parent = self.resolve(parent_path, trash=trash)
+        if not parent:
+            return
+
+        with cursor(self._conn) as c:
+            c.execute(CHILD_OF_SQL, [name, parent.id])
+            r = c.fetchone()
+            r2 = c.fetchone()
+        if not r:
+            return
+        r = Node(r)
+
+        if not r.is_available:
+            if not trash:
                 return
-            with cursor(self._conn) as c:
-                c.execute(NODE_BY_ID_SQL, [self.root_id])
-                r = c.fetchone()
-                return Node(r)
-
-        parent = self.root_id
-        for i, segment in enumerate(segments):
-            with cursor(self._conn) as c:
-                c.execute(CHILD_OF_SQL, [segment, parent])
-                r = c.fetchone()
-                r2 = c.fetchone()
-
-            if not r:
+            if r2:
+                logger.debug('None-unique trash name "%s" in %s.' % (name, parent))
                 return
-            r = Node(r)
 
-            if not r.is_available:
-                if not trash:
-                    return
-                if r2:
-                    logger.debug('None-unique trash name "%s" in %s.' % (segment, parent))
-                    return
-            if i + 1 == len(segments):
-                return r
-            if r.is_folder:
-                parent = r.id
-                continue
-            else:
-                return
+        with self.node_cache_lock:
+            self.node_id_to_node_cache[r.id] = r
+            self.path_to_node_id_cache[path] = r.id
+        return r
 
     def childrens_names(self, folder_id) -> 'List[str]':
         with cursor(self._conn) as c:
@@ -331,6 +330,29 @@ class QueryMixin(object):
             return node.simple_name
         return self.first_path(node.id) + node.name + '/'
 
+    def all_path(self, node_id: str, path_suffix=None) -> 'List[str]':
+        if node_id == self.root_id:
+            return ["/" + path_suffix]
+
+        n = self.get_node(node_id)
+        if not n:
+            return []
+        if path_suffix:
+            path_suffix = os.path.join(n.name, path_suffix)
+        else:
+            path_suffix = n.name
+
+        ret = []
+        with cursor(self._conn) as c:
+            c.execute(PARENTS_SQL, [n.id])
+            parent = c.fetchone()
+            while parent:
+                parent = Node(parent)
+                if parent.is_available:
+                    ret += self.all_path(parent.id, path_suffix)
+                parent = c.fetchone()
+        return ret
+
     def find_by_name(self, name: str) -> 'List[Node]':
         nodes = []
         with cursor(self._conn) as c:
@@ -379,7 +401,8 @@ class QueryMixin(object):
     def get_content(self, node_id:str, version:int) -> 'Union[bytes|None]':
         if version == 0: return None
         with cursor(self._conn) as c:
-            c.execute(CONTENT_ACCESSED_SQL, [datetime.utcnow(), node_id])
+            # Uncomment if/when we want to purge the cache based on LRU. Until then reduce the db load.
+            # c.execute(CONTENT_ACCESSED_SQL, [datetime.utcnow(), node_id])
             c.execute(CONTENT_BY_ID_SQL, [node_id, version])
             r = c.fetchone()
             if r:

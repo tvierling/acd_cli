@@ -4,7 +4,7 @@ import os
 import re
 import sqlite3
 import sys
-from threading import local, Lock
+from threading import local, RLock
 
 from acdcli.utils.conf import get_conf
 
@@ -71,7 +71,7 @@ class NodeCache(SchemaMixin, QueryMixin, SyncMixin, FormatterMixin):
 
         self.node_id_to_node_cache = {}
         self.path_to_node_id_cache = {}
-        self.node_cache_lock = Lock()
+        self.node_cache_lock = RLock()
         """There are a huge number of repeated path lookups,
         so cache results and selectively invalidate."""
 
