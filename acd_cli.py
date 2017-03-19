@@ -17,6 +17,8 @@ from pkgutil import walk_packages
 import appdirs
 from pkg_resources import iter_entry_points
 
+from retrying import retry
+
 import acdcli
 from acdcli import plugins
 from acdcli.api import client
@@ -215,6 +217,9 @@ def old_sync() -> 'Union[int, None]':
     cache.insert_nodes(files + folders, partial=False)
     cache.KeyValueStorage['sync_date'] = time.time()
 
+@retry(wait_exponential_multiplier=500, wait_exponential_max=60000):
+def _list_children_retry(fid: str) -> list:
+    return acd_client.list_children(fid)
 
 def partial_sync(path: str, recursive: bool) -> 'Union[int|None]':
     path = '/' + '/'.join(list(filter(bool, path.split('/'))))
@@ -242,7 +247,7 @@ def partial_sync(path: str, recursive: bool) -> 'Union[int|None]':
         fid = folder_chain[-1]['id']
 
     try:
-        children = acd_client.list_children(fid)
+        children = _list_children_retry(fid)
         if recursive:
             recursive_insert(children)
         else:
@@ -256,7 +261,8 @@ def recursive_insert(nodes: 'List[dict]'):
     cache.insert_nodes(nodes)
     for n in nodes:
         if n['kind'] == 'FOLDER':
-            recursive_insert(acd_client.list_children(n['id']))
+            logger.info("Recursive insert into %s" % n['name'])
+            recursive_insert(_list_children_retry(n['id']))
 
 
 def autosync(interval: int, stop: Event = None):
